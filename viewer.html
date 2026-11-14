@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>viewer</title>
+<style>body{margin:0;background:#D8EEF7;}</style>
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+<script type="module">
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(700, 700);
+document.body.appendChild(renderer.domElement);
+const scene = new THREE.Scene();
+scene.background = new THREE.Color('#D8EEF7');
+const camera = new THREE.PerspectiveCamera(40, 1, .1, 50);
+scene.add(new THREE.HemisphereLight('#FFFFFF', '#88AA66', 1.2));
+const sun = new THREE.DirectionalLight('#FFF2D8', 2);
+sun.position.set(3, 6, 4);
+scene.add(sun);
+
+let model = null, mixer = null;
+const clock = new THREE.Clock();
+new GLTFLoader().load('assets/Rogue.glb', g => {
+  model = g.scene;
+  scene.add(model);
+  const box = new THREE.Box3().setFromObject(model);
+  console.log('size', box.getSize(new THREE.Vector3()));
+  mixer = new THREE.AnimationMixer(model);
+  const idle = g.animations.find(a => a.name === 'Idle');
+  if (idle) mixer.clipAction(idle).play();
+  window.__anims = g.animations.map(a => a.name);
+  window.__play = n => {
+    mixer.stopAllAction();
+    const c = g.animations.find(a => a.name === n);
+    if (c) mixer.clipAction(c).play();
+  };
+  shoot(0);
+});
+function shoot(angle) {
+  if (!model) return 'not loaded';
+  if (mixer) mixer.update(.4);
+  const r = 4.2;
+  camera.position.set(Math.sin(angle)*r, 1.6, Math.cos(angle)*r);
+  camera.lookAt(0, .9, 0);
+  renderer.render(scene, camera);
+  return 'ok';
+}
+window.__shot = shoot;
+</script>
+</body>
+</html>

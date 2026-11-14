@@ -1,0 +1,1681 @@
+<title>Полянка</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; -webkit-user-select:none; user-select:none; touch-action:none; }
+  html, body { height:100%; overflow:hidden; background:#CDA8DF; }
+  #hint {
+    position:fixed; left:50%; bottom:3vh; transform:translateX(-50%);
+    font-family: ui-rounded, "SF Pro Rounded", system-ui, sans-serif;
+    font-size:15px; font-weight:700; color:#5A4A6A;
+    background:rgba(255,250,240,.85); padding:8px 18px; border-radius:22px;
+    pointer-events:none; max-width:88vw; text-align:center; line-height:1.35;
+    transition:opacity 1.2s;
+  }
+  #word {
+    position:fixed; left:50%; top:4vh; transform:translateX(-50%);
+    font-family: ui-rounded, "SF Pro Rounded", system-ui, sans-serif;
+    font-size:clamp(17px, 2.6vw, 24px); font-weight:800; color:#3A2E26;
+    background:rgba(255,250,240,.92); padding:10px 22px; border-radius:24px;
+    pointer-events:none; opacity:0; transition:opacity .35s; white-space:nowrap;
+    box-shadow:0 3px 14px rgba(90,60,30,.18); z-index:6;
+  }
+  #joyBase, #joyKnob {
+    position:fixed; border-radius:50%; pointer-events:none; display:none; z-index:5;
+    transform:translate(-50%,-50%);
+  }
+  #joyBase { width:96px; height:96px; background:rgba(255,255,255,.22); border:2px solid rgba(255,255,255,.65); }
+  #joyKnob { width:44px; height:44px; background:rgba(255,255,255,.78); box-shadow:0 2px 8px rgba(0,0,0,.2); }
+</style>
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+} }
+</script>
+
+<div id="hint">Тапни на полянку — Луи пойдёт сам · или веди пальцем · WASD</div>
+<div id="joyBase"></div><div id="joyKnob"></div>
+<div id="word"></div>
+<script type="module">
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+
+/* ================= сцена ================= */
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(innerWidth, innerHeight);
+renderer.setPixelRatio(Math.min(devicePixelRatio, 1.5)); // ретина не заметит, старым iPad легче на 44%
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.05;
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+const outdoorG = new THREE.Group();   // весь уличный мир — прячется, когда Луи в доме
+scene.add(outdoorG);
+const FOG_COLOR = new THREE.Color('#EBD3E8');
+scene.fog = new THREE.Fog(FOG_COLOR, 70, 330);
+
+const camera = new THREE.PerspectiveCamera(55, innerWidth/innerHeight, .1, 900);
+
+addEventListener('resize', () => {
+  camera.aspect = innerWidth/innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+
+/* небо: градиентная сфера */
+const sky = new THREE.Mesh(
+  new THREE.SphereGeometry(600, 24, 16),
+  new THREE.ShaderMaterial({
+    side: THREE.BackSide, depthWrite: false, fog: false,
+    uniforms: {},
+    vertexShader: `varying vec3 vP; void main(){ vP = position; gl_Position = projectionMatrix*modelViewMatrix*vec4(position,1.); }`,
+    fragmentShader: `
+      varying vec3 vP;
+      void main(){
+        float h = normalize(vP).y;
+        vec3 top = vec3(0.64,0.52,0.80);      // лавандовый верх
+        vec3 mid = vec3(0.86,0.70,0.82);      // розовая дымка
+        vec3 hor = vec3(0.98,0.90,0.80);      // кремовый горизонт
+        vec3 c = h > 0.25 ? mix(mid, top, smoothstep(0.25, 0.8, h))
+                          : mix(hor, mid, smoothstep(-0.05, 0.25, h));
+        vec3 d = normalize(vP);
+        float g = pow(max(dot(d, normalize(vec3(-.25, .16, -.94))), 0.), 7.);
+        c += vec3(.55, .38, .22) * g;   // тёплое закатное свечение за деревней
+        gl_FragColor = vec4(c, 1.);
+      }`
+  })
+);
+scene.add(sky);
+
+/* свет */
+scene.add(new THREE.HemisphereLight('#D9C2E8', '#6FA14E', .85));
+const sun = new THREE.DirectionalLight('#FFE9C4', 1.6);
+sun.position.set(-60, 80, 40);
+scene.add(sun);
+
+/* тун-градиент для мультяшного света */
+const toonTex = new THREE.DataTexture(new Uint8Array([90,90,90,255, 170,170,170,255, 255,255,255,255]), 3, 1);
+toonTex.needsUpdate = true;
+function toon(color) { return new THREE.MeshToonMaterial({ color, gradientMap: toonTex, fog: true }); }
+
+/* ================= рельеф ================= */
+const SIZE = 720;
+function hills(x, z) {
+  return 2.4*Math.sin(x*0.030)*Math.cos(z*0.026)
+       + 1.3*Math.sin(x*0.075+1.7)*Math.sin(z*0.06+0.4)
+       + 0.5*Math.sin(x*0.15+3.1)*Math.cos(z*0.13);
+}
+const pathX = z => 3.5*Math.sin(z*0.045) + 1.5*Math.sin(z*0.013+2.0);
+
+const terGeo = new THREE.PlaneGeometry(SIZE, SIZE, 96, 96);
+terGeo.rotateX(-Math.PI/2);
+const pos = terGeo.attributes.position;
+const colors = [];
+const GRASS_A = new THREE.Color('#7CBE4C'), GRASS_B = new THREE.Color('#9ED45E'), PATH_C = new THREE.Color('#C8A777');
+for (let i = 0; i < pos.count; i++) {
+  const x = pos.getX(i), z = pos.getZ(i);
+  const y = hills(x, z);
+  pos.setY(i, y);
+  const dPath = Math.abs(x - pathX(z));
+  const c = dPath < 1.4 ? PATH_C.clone().lerp(new THREE.Color('#B89465'), Math.random()*.3)
+          : GRASS_A.clone().lerp(GRASS_B, THREE.MathUtils.clamp((y+2)/6, 0, 1));
+  colors.push(c.r, c.g, c.b);
+}
+terGeo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+terGeo.computeVertexNormals();
+const terrain = new THREE.Mesh(terGeo, new THREE.MeshToonMaterial({ vertexColors: true, gradientMap: toonTex }));
+outdoorG.add(terrain);
+
+/* невидимая грубая сетка только для рейкаста тапов (40×40 вместо 96×96) */
+const proxyGeo = new THREE.PlaneGeometry(SIZE, SIZE, 40, 40);
+proxyGeo.rotateX(-Math.PI/2);
+const ppos = proxyGeo.attributes.position;
+for (let i = 0; i < ppos.count; i++) ppos.setY(i, hills(ppos.getX(i), ppos.getZ(i)));
+const rayGround = new THREE.Mesh(proxyGeo, new THREE.MeshBasicMaterial());
+rayGround.visible = false;
+scene.add(rayGround);
+
+/* ================= трава (инстансы с ветром) ================= */
+const BLADES = navigator.maxTouchPoints > 0 ? 36000 : 64000; // планшетам полегче
+const bladeGeo = new THREE.BufferGeometry();
+bladeGeo.setAttribute('position', new THREE.Float32BufferAttribute([-0.06,0,0, 0.06,0,0, 0,0.72,0], 3));
+const offsets = new Float32Array(BLADES*3), scales = new Float32Array(BLADES), rots = new Float32Array(BLADES), tints = new Float32Array(BLADES);
+let bi = 0;
+while (bi < BLADES) {
+  // трава густо — в игровом коридоре вокруг тропинки и деревни
+  const x = (Math.random()-.5)*300, z = -50 + (Math.random()-.5)*320;
+  if (Math.abs(x - pathX(z)) < 1.3) continue;           // тропинка без травы
+  offsets[bi*3] = x; offsets[bi*3+1] = hills(x, z); offsets[bi*3+2] = z;
+  scales[bi] = .7 + Math.random()*.9;
+  rots[bi] = Math.random()*Math.PI;
+  tints[bi] = Math.random();
+  bi++;
+}
+const grassGeo = new THREE.InstancedBufferGeometry();
+grassGeo.index = bladeGeo.index; grassGeo.attributes.position = bladeGeo.attributes.position;
+grassGeo.setAttribute('aOffset', new THREE.InstancedBufferAttribute(offsets, 3));
+grassGeo.setAttribute('aScale', new THREE.InstancedBufferAttribute(scales, 1));
+grassGeo.setAttribute('aRot', new THREE.InstancedBufferAttribute(rots, 1));
+grassGeo.setAttribute('aTint', new THREE.InstancedBufferAttribute(tints, 1));
+grassGeo.instanceCount = BLADES;
+const grassMat = new THREE.ShaderMaterial({
+  side: THREE.DoubleSide,
+  uniforms: { uTime: { value: 0 }, uFog: { value: FOG_COLOR }, uHero: { value: new THREE.Vector3(0, 0, 1e6) } },
+  vertexShader: `
+    attribute vec3 aOffset; attribute float aScale, aRot, aTint;
+    uniform float uTime;
+    uniform vec3 uHero;
+    varying float vH, vTint, vFog;
+    void main(){
+      vec3 p = position;
+      float c = cos(aRot), s = sin(aRot);
+      p = vec3(c*p.x + s*p.z, p.y*aScale, -s*p.x + c*p.z);
+      float sway = sin(uTime*1.7 + aOffset.x*0.6 + aOffset.z*0.45) * 0.22
+                 + sin(uTime*3.3 + aOffset.z*1.3) * 0.06;
+      p.x += sway * position.y;  p.z += sway * 0.4 * position.y;
+      // Луи раздвигает и приминает траву вокруг себя
+      vec2 toHero = aOffset.xz - uHero.xz;
+      float dH = length(toHero);
+      float push = smoothstep(1.7, 0.1, dH);
+      vec2 dir = dH > 0.01 ? toHero / dH : vec2(1.0, 0.0);
+      p.x += dir.x * push * 0.55 * position.y;
+      p.z += dir.y * push * 0.55 * position.y;
+      p.y *= 1.0 - push * 0.45;
+      vec4 mv = modelViewMatrix * vec4(aOffset + p, 1.);
+      vH = position.y/0.72; vTint = aTint;
+      vFog = smoothstep(70., 330., -mv.z);
+      gl_Position = projectionMatrix * mv;
+    }`,
+  fragmentShader: `
+    uniform vec3 uFog;
+    varying float vH, vTint, vFog;
+    void main(){
+      vec3 base = mix(vec3(0.30,0.55,0.20), vec3(0.38,0.62,0.24), vTint);
+      vec3 tip  = mix(vec3(0.62,0.85,0.34), vec3(0.74,0.92,0.42), vTint);
+      vec3 c = mix(base, tip, vH);
+      gl_FragColor = vec4(mix(c, uFog, vFog), 1.);
+    }`
+});
+const grassMesh = new THREE.Mesh(grassGeo, grassMat);
+grassMesh.frustumCulled = false;   // иначе three отсекает всю траву по центру мира
+outdoorG.add(grassMesh);
+
+/* цветочки */
+const FLOWERS = 1700;
+const fGeo = new THREE.InstancedBufferGeometry();
+const fq = new THREE.PlaneGeometry(.13, .13);
+fGeo.index = fq.index; fGeo.attributes.position = fq.attributes.position; fGeo.attributes.uv = fq.attributes.uv;
+const fOff = new Float32Array(FLOWERS*3), fCol = new Float32Array(FLOWERS*3);
+const FPAL = [[1,1,1],[1,.85,.9],[1,.95,.6],[.85,.8,1]];
+let fi = 0;
+while (fi < FLOWERS) {
+  const x = (Math.random()-.5)*300, z = -50 + (Math.random()-.5)*320;
+  if (Math.abs(x - pathX(z)) < 1.6) continue;
+  fOff[fi*3] = x; fOff[fi*3+1] = hills(x,z)+.3+Math.random()*.2; fOff[fi*3+2] = z;
+  const c = FPAL[(Math.random()*FPAL.length)|0];
+  fCol[fi*3] = c[0]; fCol[fi*3+1] = c[1]; fCol[fi*3+2] = c[2];
+  fi++;
+}
+fGeo.setAttribute('aOffset', new THREE.InstancedBufferAttribute(fOff, 3));
+fGeo.setAttribute('aCol', new THREE.InstancedBufferAttribute(fCol, 3));
+fGeo.instanceCount = FLOWERS;
+const fMat = new THREE.ShaderMaterial({
+  side: THREE.DoubleSide,
+  uniforms: { uTime: { value: 0 }, uFog: { value: FOG_COLOR } },
+  vertexShader: `
+    attribute vec3 aOffset, aCol; uniform float uTime;
+    varying vec3 vC; varying float vFog; varying vec2 vUv;
+    void main(){
+      vec3 p = position;
+      p.x += sin(uTime*1.7 + aOffset.x*0.6)*0.05;
+      vec4 mv = modelViewMatrix * vec4(aOffset, 1.);
+      mv.xyz += p;                       // билборд
+      vC = aCol; vUv = uv;
+      vFog = smoothstep(70., 330., -mv.z);
+      gl_Position = projectionMatrix * mv;
+    }`,
+  fragmentShader: `
+    uniform vec3 uFog; varying vec3 vC; varying float vFog; varying vec2 vUv;
+    void main(){
+      if (length(vUv-0.5) > 0.5) discard;
+      gl_FragColor = vec4(mix(vC, uFog, vFog), 1.);
+    }`
+});
+const flowerMesh = new THREE.Mesh(fGeo, fMat);
+flowerMesh.frustumCulled = false;
+outdoorG.add(flowerMesh);
+
+/* ================= деревья, деревня, горы ================= */
+const treeList = [];
+function tree(x, z, s) {
+  const g = new THREE.Group();
+  const trunk = new THREE.Mesh(new THREE.CylinderGeometry(.15*s, .22*s, 1.2*s, 6), toon('#8A5F3C'));
+  trunk.position.y = .6*s;
+  const c1 = new THREE.Mesh(new THREE.IcosahedronGeometry(1.1*s, 0), toon('#55923B'));
+  c1.position.y = 1.7*s;
+  const c2 = new THREE.Mesh(new THREE.IcosahedronGeometry(.8*s, 0), toon('#6AAE45'));
+  c2.position.set(.5*s, 2.2*s, .2*s);
+  g.add(trunk, c1, c2);
+  g.position.set(x, hills(x,z), z);
+  g.rotation.y = Math.random()*Math.PI;
+  outdoorG.add(g);
+  treeList.push({ g, x, z, s, cool: -9, wig: -9 });
+}
+
+/* листики, слетающие с потревоженного дерева */
+const leafGeo = new THREE.PlaneGeometry(.15, .2);
+const leafMat = new THREE.MeshBasicMaterial({ color: '#6FBC3A', side: THREE.DoubleSide });
+const leaves = [];
+function spawnLeaves(x, y, z, n) {
+  for (let i = 0; i < n; i++) {
+    const m = new THREE.Mesh(leafGeo, leafMat);
+    m.position.set(x + (Math.random()-.5)*1.2, y + Math.random()*.8, z + (Math.random()-.5)*1.2);
+    m.rotation.set(Math.random()*3, Math.random()*3, 0);
+    leaves.push({ m, vy: -.5 - Math.random()*.4, vx: (Math.random()-.5)*.7, vz: (Math.random()-.5)*.7, rs: (Math.random()-.5)*7, life: 1.8 });
+    outdoorG.add(m);
+  }
+}
+for (let i = 0; i < 64; i++) {
+  const x = (Math.random()-.5)*340, z = -60 + (Math.random()-.5)*360;
+  if (Math.abs(x-pathX(z)) < 4) continue;
+  tree(x, z, .8+Math.random()*1.4);
+}
+
+function house(x, z, s, ry) {
+  const g = new THREE.Group();
+  const walls = new THREE.Mesh(new THREE.BoxGeometry(2.2*s, 1.6*s, 1.8*s), toon('#F6EFE2'));
+  walls.position.y = .8*s;
+  const roof = new THREE.Mesh(new THREE.ConeGeometry(1.8*s, 1.1*s, 4), toon('#C96B47'));
+  roof.position.y = 2.1*s; roof.rotation.y = Math.PI/4;
+  g.add(walls, roof);
+  g.position.set(x, hills(x,z), z);
+  g.rotation.y = ry;
+  outdoorG.add(g);
+}
+const VX = -38, VZ = -110;
+[[0,0,1.3],[6,3,1],[-6,4,1.1],[3,-6,.9],[-4,-5,1],[10,-2,.8],[-11,-1,.9]].forEach(([dx,dz,s]) =>
+  house(VX+dx, VZ+dz, s, Math.random()*Math.PI));
+/* мельница */
+const mill = new THREE.Group();
+const tower = new THREE.Mesh(new THREE.CylinderGeometry(1.1, 1.6, 5.5, 8), toon('#F6EFE2'));
+tower.position.y = 2.75;
+const cap = new THREE.Mesh(new THREE.ConeGeometry(1.4, 1.2, 8), toon('#C96B47'));
+cap.position.y = 6;
+const blades = new THREE.Group();
+for (let i = 0; i < 4; i++) {
+  const b = new THREE.Mesh(new THREE.BoxGeometry(.25, 3.4, .06), toon('#E8DCC8'));
+  b.position.y = 1.7;
+  const arm = new THREE.Group();
+  arm.add(b); arm.rotation.z = i*Math.PI/2;
+  blades.add(arm);
+}
+blades.position.set(0, 5.4, 1.3);
+mill.add(tower, cap, blades);
+mill.position.set(VX+16, hills(VX+16, VZ+6), VZ+6);
+outdoorG.add(mill);
+
+/* ================= настоящий динозаврик ================= */
+function buildDinoHead(s) {
+  const g = new THREE.Group();
+  const skull = new THREE.Mesh(new THREE.SphereGeometry(.34*s, 14, 12), toon('#5FAE3C'));
+  skull.scale.set(1, .92, 1.15);
+  const snout = new THREE.Mesh(new THREE.BoxGeometry(.36*s, .24*s, .42*s), toon('#6CC24A'));
+  snout.position.set(0, -.05*s, .4*s);
+  const jaw = new THREE.Mesh(new THREE.BoxGeometry(.32*s, .11*s, .36*s), toon('#4E9430'));
+  jaw.position.set(0, -.21*s, .36*s);
+  g.add(skull, snout, jaw);
+  [-.09, 0, .09].forEach(x => {
+    const tooth = new THREE.Mesh(new THREE.ConeGeometry(.03*s, .08*s, 6), toon('#FFFFFF'));
+    tooth.rotation.x = Math.PI;
+    tooth.position.set(x*s, -.15*s, .58*s);
+    g.add(tooth);
+  });
+  [-.07, .07].forEach(x => {
+    const nostril = new THREE.Mesh(new THREE.SphereGeometry(.025*s, 6, 5), toon('#2E6B1E'));
+    nostril.position.set(x*s, .08*s, .6*s);
+    g.add(nostril);
+  });
+  [-1, 1].forEach(sx => {
+    const eye = new THREE.Mesh(new THREE.SphereGeometry(.1*s, 10, 8), toon('#FFFFFF'));
+    eye.position.set(sx*.18*s, .13*s, .22*s);
+    const pupil = new THREE.Mesh(new THREE.SphereGeometry(.05*s, 8, 6), toon('#26261F'));
+    pupil.position.set(sx*.2*s, .13*s, .3*s);
+    const brow = new THREE.Mesh(new THREE.BoxGeometry(.16*s, .05*s, .1*s), toon('#3E7E2A'));
+    brow.position.set(sx*.18*s, .26*s, .24*s);
+    brow.rotation.z = -sx*.25;
+    g.add(eye, pupil, brow);
+  });
+  [0, 1].forEach(i => {
+    const crest = new THREE.Mesh(new THREE.ConeGeometry(.06*s, .16*s, 6), toon('#3E7E2A'));
+    crest.position.set(0, (.32 - i*.06)*s, (-.05 - i*.16)*s);
+    g.add(crest);
+  });
+  return g;
+}
+function buildDino(s) {
+  const g = new THREE.Group();
+  const body = new THREE.Mesh(new THREE.SphereGeometry(.55*s, 16, 12), toon('#5FAE3C'));
+  body.scale.set(1, .85, 1.5);
+  body.position.y = .95*s;
+  const belly = new THREE.Mesh(new THREE.SphereGeometry(.42*s, 14, 10), toon('#C8E8A0'));
+  belly.scale.set(.95, .75, 1.25);
+  belly.position.set(0, .82*s, .12*s);
+  g.add(body, belly);
+  [-1, 1].forEach(sx => {
+    const leg = new THREE.Mesh(new THREE.CapsuleGeometry(.16*s, .5*s, 4, 8), toon('#4E9430'));
+    leg.position.set(sx*.32*s, .45*s, -.1*s);
+    const foot = new THREE.Mesh(new THREE.SphereGeometry(.18*s, 10, 8), toon('#6CC24A'));
+    foot.scale.set(1.2, .5, 1.6);
+    foot.position.set(sx*.32*s, .1*s, .02*s);
+    const arm = new THREE.Mesh(new THREE.CapsuleGeometry(.07*s, .26*s, 4, 8), toon('#4E9430'));
+    arm.position.set(sx*.42*s, 1.0*s, .5*s);
+    arm.rotation.x = -.7;
+    g.add(leg, foot, arm);
+  });
+  const tailG = new THREE.Group();
+  [[.28, -.85, .85], [.2, -1.25, .8], [.13, -1.55, .78]].forEach(([r, z, y]) => {
+    const seg = new THREE.Mesh(new THREE.SphereGeometry(r*s, 12, 10), toon('#5FAE3C'));
+    seg.position.set(0, y*s, z*s);
+    tailG.add(seg);
+  });
+  const tailTip = new THREE.Mesh(new THREE.ConeGeometry(.1*s, .4*s, 8), toon('#4E9430'));
+  tailTip.rotation.x = Math.PI/2;
+  tailTip.position.set(0, .78*s, -1.85*s);
+  tailG.add(tailTip);
+  g.add(tailG);
+  [[.35, 1.38], [0, 1.45], [-.4, 1.38], [-.8, 1.12]].forEach(([z, y]) => {
+    const spike = new THREE.Mesh(new THREE.ConeGeometry(.09*s, .22*s, 6), toon('#3E7E2A'));
+    spike.position.set(0, y*s, z*s);
+    g.add(spike);
+  });
+  const neck = new THREE.Mesh(new THREE.CylinderGeometry(.18*s, .24*s, .5*s, 10), toon('#5FAE3C'));
+  neck.position.set(0, 1.3*s, .55*s);
+  neck.rotation.x = .5;
+  g.add(neck);
+  const headG = buildDinoHead(s);
+  headG.position.set(0, 1.62*s, .78*s);
+  g.add(headG);
+  g.userData = { tailG, headG };
+  return g;
+}
+
+/* ================= домик зверёнка ================= */
+const HX = pathX(-42) + 2.8, HZ = -42;
+const houseG = new THREE.Group();
+const hw = new THREE.Mesh(new THREE.BoxGeometry(3.6, 2.5, 3.2), toon('#F8EFD9'));
+hw.position.y = 1.25;
+const hroof = new THREE.Mesh(new THREE.ConeGeometry(3.3, 1.8, 4), toon('#C96B47'));
+hroof.position.y = 3.25; hroof.rotation.y = Math.PI/4;
+const chim = new THREE.Mesh(new THREE.BoxGeometry(.4, .9, .4), toon('#B98A64'));
+chim.position.set(1, 3.8, -.6);
+const winm = new THREE.Mesh(new THREE.CircleGeometry(.4, 14), toon('#BFE3F2'));
+winm.position.set(-1.0, 1.55, 1.62);
+const doorway = new THREE.Mesh(new THREE.PlaneGeometry(1.1, 1.72), new THREE.MeshBasicMaterial({ color: '#3A2E26' }));
+doorway.position.set(0, .94, 1.605);
+const doorPivot = new THREE.Group();
+doorPivot.position.set(-.55, .08, 1.62);
+const door = new THREE.Mesh(new THREE.BoxGeometry(1.1, 1.7, .1), toon('#5B7FD4'));
+door.position.set(.55, .85, 0);
+const knob = new THREE.Mesh(new THREE.SphereGeometry(.07, 8, 6), toon('#EDD27A'));
+knob.position.set(.95, .85, .09);
+doorPivot.add(door, knob);
+/* Дино выглядывает из-за двери — настоящая морда */
+const dinoHead = buildDinoHead(1.15);
+const dHit = new THREE.Mesh(new THREE.SphereGeometry(.9, 8, 6), new THREE.MeshBasicMaterial({ visible: false }));
+dinoHead.add(dHit);   // dHit — щедрая зона тапа для ладошки
+dinoHead.position.set(.28, 1.15, .9);
+houseG.add(hw, hroof, chim, winm, doorway, doorPivot, dinoHead);
+houseG.position.set(HX, hills(HX, HZ), HZ);
+outdoorG.add(houseG);
+
+let doorOpen = false, doorAnim = 0, knockT = -9;
+let audioCtx = null;            // ОДИН общий контекст, создаётся жестом
+let pendingGreet = false;
+function knockSfx() {
+  if (!audioCtx || audioCtx.state !== 'running') return;
+  try {
+    [0, .22].forEach(d => {
+      const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+      o.type = 'triangle'; o.frequency.value = 170;   // мягкий «тук-тук», не пугает
+      g.gain.setValueAtTime(.15, audioCtx.currentTime + d);
+      g.gain.exponentialRampToValueAtTime(.001, audioCtx.currentTime + d + .09);
+      o.connect(g); g.connect(audioCtx.destination);
+      o.start(audioCtx.currentTime + d); o.stop(audioCtx.currentTime + d + .12);
+    });
+  } catch (e) {}
+}
+function blip(freq, dur, type, vol, slideTo) {
+  if (!audioCtx || audioCtx.state !== 'running') return;
+  try {
+    const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+    o.type = type; o.frequency.setValueAtTime(freq, audioCtx.currentTime);
+    if (slideTo) o.frequency.exponentialRampToValueAtTime(slideTo, audioCtx.currentTime + dur);
+    g.gain.setValueAtTime(vol, audioCtx.currentTime);
+    g.gain.exponentialRampToValueAtTime(.001, audioCtx.currentTime + dur);
+    o.connect(g); g.connect(audioCtx.destination);
+    o.start(); o.stop(audioCtx.currentTime + dur + .05);
+  } catch (e) {}
+}
+
+/* словарик мира: трогаешь — слышишь слово на двух языках */
+const wordEl = document.getElementById('word');
+let wordCool = -9, wordTimer = null;
+function sayWorld(ru, de, tNow) {
+  if (tNow - wordCool < 2.2) return;          // не тараторим
+  wordCool = tNow;
+  wordEl.textContent = ru.replace('!','') + ' · ' + de.replace('!','');
+  wordEl.style.opacity = '1';
+  clearTimeout(wordTimer);
+  wordTimer = setTimeout(() => { wordEl.style.opacity = '0'; }, 2400);
+  if (!spoke || !('speechSynthesis' in window)) return;
+  try {
+    speechSynthesis.cancel();
+    const u1 = new SpeechSynthesisUtterance(ru);
+    u1.lang = 'ru-RU'; u1.pitch = 1.25; u1.rate = .95;
+    const u2 = new SpeechSynthesisUtterance(de);
+    u2.lang = 'de-DE'; u2.pitch = 1.25; u2.rate = .95;
+    speechSynthesis.speak(u1); speechSynthesis.speak(u2);
+  } catch (e) {}
+}
+
+function greet() {
+  if (!('speechSynthesis' in window)) return;
+  if (!spoke) { pendingGreet = true; return; }   // жеста ещё не было — скажем при первом касании
+  try {
+    speechSynthesis.cancel();
+    const u1 = new SpeechSynthesisUtterance('Тук-тук! Привет, Луи!');
+    u1.lang = 'ru-RU'; u1.pitch = 1.3; u1.rate = .9;
+    const u2 = new SpeechSynthesisUtterance('Hallo, Louis! Komm rein!');
+    u2.lang = 'de-DE'; u2.pitch = 1.3; u2.rate = .9;
+    speechSynthesis.speak(u1); speechSynthesis.speak(u2);
+  } catch (e) {}
+}
+
+/* маркер-цель над домиком: жёлтая стрелка, прыгает */
+const goalMarker = new THREE.Mesh(new THREE.ConeGeometry(.5, 1.0, 10), toon('#FFD93D'));
+goalMarker.rotation.x = Math.PI;                 // остриём вниз
+goalMarker.position.set(HX, hills(HX, HZ) + 5.6, HZ + 1);
+outdoorG.add(goalMarker);
+let goalSeen = false;
+
+/* кольцо на земле — куда тапнул */
+const tapRing = new THREE.Mesh(new THREE.RingGeometry(.35, .52, 24), new THREE.MeshBasicMaterial({ color: '#FFE066', side: THREE.DoubleSide, transparent: true, opacity: .9 }));
+tapRing.rotation.x = -Math.PI/2;
+tapRing.visible = false;
+scene.add(tapRing);
+
+/* облачко «Привет, Луи!» — дублирует голос, если звук выключен */
+const bubbleTex = (() => {
+  const cv = document.createElement('canvas'); cv.width = 512; cv.height = 192;
+  const c2 = cv.getContext('2d');
+  c2.fillStyle = 'rgba(255,252,245,.96)';
+  c2.beginPath(); c2.roundRect(10, 10, 492, 148, 46); c2.fill();
+  c2.strokeStyle = '#C96B47'; c2.lineWidth = 8; c2.stroke();
+  c2.fillStyle = '#3A2E26'; c2.font = '700 56px system-ui, sans-serif'; c2.textAlign = 'center';
+  c2.fillText('Привет, Луи!', 256, 102);
+  return new THREE.CanvasTexture(cv);
+})();
+const bubble = new THREE.Sprite(new THREE.SpriteMaterial({ map: bubbleTex, transparent: true }));
+bubble.scale.set(3.6, 1.35, 1);
+bubble.visible = false;
+outdoorG.add(bubble);
+
+/* ================= комната внутри домика (кукольный дом в разрезе) ================= */
+const RX = 400, RZ = 0, ROOM_Y = 0;
+const RX2 = 450;                 // кухня — вторая комната
+let indoor = false, inKitchen = false, inPlay = false, sitting = false, sitPending = false, lying = false, bedPending = false, sitSpot = null;
+let lampOn = true, outdoorReturn = null, dinoRoomGig = -9, dinoChew = -9, dinoBaseRy = .55;
+let lullNext = 0, lullIdx = 0;
+const LULLABY = [523, 659, 784, 659, 523, 392, 440, 523];
+const wordObjects = [];
+const roomG = new THREE.Group();
+const roomFloor = new THREE.Mesh(new THREE.BoxGeometry(24, .3, 18), toon('#C9A06B'));
+roomFloor.position.set(RX, ROOM_Y - .15, RZ);
+const rug = new THREE.Mesh(new THREE.CircleGeometry(3.4, 28), toon('#E0B14C'));
+rug.rotation.x = -Math.PI/2; rug.position.set(RX - .3, ROOM_Y + .02, RZ - 1);
+const rug2 = new THREE.Mesh(new THREE.CircleGeometry(2.2, 28), toon('#C96B47'));
+rug2.rotation.x = -Math.PI/2; rug2.position.set(RX - .3, ROOM_Y + .03, RZ - 1);
+const wallMat = toon('#F3E6CC');
+const wBack = new THREE.Mesh(new THREE.BoxGeometry(24, 5, .3), wallMat);
+wBack.position.set(RX, ROOM_Y + 2.5, RZ - 9);
+const wL = new THREE.Mesh(new THREE.BoxGeometry(.3, 5, 18), wallMat);
+wL.position.set(RX - 12, ROOM_Y + 2.5, RZ);
+const wR = wL.clone(); wR.position.x = RX + 12;
+roomG.add(roomFloor, rug, rug2, wBack, wL, wR);
+[rug, rug2].forEach(o => wordObjects.push({ o, ru: 'Ковёр!', de: 'Der Teppich!' }));
+[wBack, wL, wR].forEach(o => wordObjects.push({ o, ru: 'Стена!', de: 'Die Wand!' }));
+/* окно — как настоящее: рама, переплёт, подоконник и вид на двор */
+const winTex = (() => {
+  const cv = document.createElement('canvas'); cv.width = 256; cv.height = 196;
+  const c2 = cv.getContext('2d');
+  const gr = c2.createLinearGradient(0, 0, 0, 196);
+  gr.addColorStop(0, '#8FCBEE'); gr.addColorStop(1, '#D8EFF8');
+  c2.fillStyle = gr; c2.fillRect(0, 0, 256, 196);
+  c2.fillStyle = '#FFE9A8';
+  c2.beginPath(); c2.arc(202, 46, 26, 0, 7); c2.fill();            // солнышко
+  c2.fillStyle = 'rgba(255,255,255,.95)';
+  [[70, 72, 24], [100, 62, 32], [132, 74, 22]].forEach(([x, y, r]) => { c2.beginPath(); c2.arc(x, y, r, 0, 7); c2.fill(); });
+  c2.fillStyle = '#7FCB42'; c2.fillRect(0, 158, 256, 38);          // лужайка
+  return new THREE.CanvasTexture(cv);
+})();
+const winFrame = new THREE.Mesh(new THREE.BoxGeometry(3.0, 2.3, .14), toon('#8A5F3C'));
+winFrame.position.set(RX + 5.5, ROOM_Y + 2.6, RZ - 8.88);
+const winGlass = new THREE.Mesh(new THREE.PlaneGeometry(2.6, 1.9), new THREE.MeshBasicMaterial({ map: winTex }));
+winGlass.position.set(RX + 5.5, ROOM_Y + 2.6, RZ - 8.80);
+const winBarV = new THREE.Mesh(new THREE.BoxGeometry(.09, 1.9, .06), toon('#FFFFFF'));
+winBarV.position.set(RX + 5.5, ROOM_Y + 2.6, RZ - 8.77);
+const winBarH = new THREE.Mesh(new THREE.BoxGeometry(2.6, .09, .06), toon('#FFFFFF'));
+winBarH.position.set(RX + 5.5, ROOM_Y + 2.6, RZ - 8.77);
+const winSill = new THREE.Mesh(new THREE.BoxGeometry(3.3, .14, .5), toon('#A97B4F'));
+winSill.position.set(RX + 5.5, ROOM_Y + 1.42, RZ - 8.70);
+roomG.add(winFrame, winGlass, winBarV, winBarH, winSill);
+[winGlass, winFrame, winBarV, winBarH, winSill].forEach(o => wordObjects.push({ o, ru: 'Окно!', de: 'Das Fenster!' }));
+/* камин с живым огнём */
+const fpBody = new THREE.Mesh(new THREE.BoxGeometry(3.0, 2.5, .9), toon('#B0624A'));
+fpBody.position.set(RX - 6.5, ROOM_Y + 1.25, RZ - 8.5);
+const fpHole = new THREE.Mesh(new THREE.BoxGeometry(1.7, 1.5, .5), new THREE.MeshBasicMaterial({ color: '#2A1A12' }));
+fpHole.position.set(RX - 6.5, ROOM_Y + .85, RZ - 8.18);
+const fpTop = new THREE.Mesh(new THREE.BoxGeometry(3.5, .25, 1.1), toon('#8A5F3C'));
+fpTop.position.set(RX - 6.5, ROOM_Y + 2.6, RZ - 8.5);
+const flame1 = new THREE.Mesh(new THREE.ConeGeometry(.36, 1.0, 8), new THREE.MeshBasicMaterial({ color: '#FF9C33' }));
+flame1.position.set(RX - 6.5, ROOM_Y + .65, RZ - 8.2);
+const flame2 = new THREE.Mesh(new THREE.ConeGeometry(.2, .6, 8), new THREE.MeshBasicMaterial({ color: '#FFE066' }));
+flame2.position.set(RX - 6.42, ROOM_Y + .58, RZ - 8.1);
+const fireLight = new THREE.PointLight('#FFB366', 1.2, 13);
+fireLight.position.set(RX - 6.5, ROOM_Y + 1.2, RZ - 7.6);
+roomG.add(fpBody, fpHole, fpTop, flame1, flame2, fireLight);
+wordObjects.push({ o: fpBody, ru: 'Камин!', de: 'Der Kamin!' }, { o: flame1, ru: 'Огонь!', de: 'Das Feuer!' }, { o: flame2, ru: 'Огонь!', de: 'Das Feuer!' });
+/* диван — на него можно сесть */
+const sofaG = new THREE.Group();
+const sMat = toon('#C96B6B');
+const sSeat = new THREE.Mesh(new THREE.BoxGeometry(1.1, .5, 2.4), sMat); sSeat.position.y = .25;
+const sBack = new THREE.Mesh(new THREE.BoxGeometry(.35, 1.1, 2.4), sMat); sBack.position.set(.45, .55, 0);
+const sArm1 = new THREE.Mesh(new THREE.BoxGeometry(1.1, .75, .3), sMat); sArm1.position.set(0, .37, 1.2);
+const sArm2 = sArm1.clone(); sArm2.position.z = -1.2;
+sofaG.add(sSeat, sBack, sArm1, sArm2);
+sofaG.position.set(RX + 8.5, ROOM_Y, RZ - 5.5);
+roomG.add(sofaG);
+wordObjects.push({ o: sofaG, ru: 'Диван!', de: 'Das Sofa!', kind: 'sofa' });
+/* стул у стола — на него тоже можно сесть */
+const chairG = new THREE.Group();
+const chSeat = new THREE.Mesh(new THREE.BoxGeometry(.8, .12, .8), toon('#A97B4F'));
+chSeat.position.y = .58;
+const chBack = new THREE.Mesh(new THREE.BoxGeometry(.12, .95, .8), toon('#A97B4F'));
+chBack.position.set(-.34, 1.0, 0);
+chairG.add(chSeat, chBack);
+[[-.3, -.3], [.3, -.3], [-.3, .3], [.3, .3]].forEach(([lx, lz]) => {
+  const leg = new THREE.Mesh(new THREE.BoxGeometry(.09, .58, .09), toon('#8A5F3C'));
+  leg.position.set(lx, .29, lz);
+  chairG.add(leg);
+});
+chairG.position.set(RX + 4.9, ROOM_Y, RZ + 4.5);
+roomG.add(chairG);
+wordObjects.push({ o: chairG, ru: 'Стул!', de: 'Der Stuhl!', kind: 'chair' });
+/* стол и чашка */
+const tableTop = new THREE.Mesh(new THREE.CylinderGeometry(1.2, 1.2, .12, 16), toon('#A97B4F'));
+tableTop.position.set(RX + 6.5, ROOM_Y + .85, RZ + 4.5);
+const tableLeg = new THREE.Mesh(new THREE.CylinderGeometry(.14, .18, .85, 10), toon('#8A5F3C'));
+tableLeg.position.set(RX + 6.5, ROOM_Y + .42, RZ + 4.5);
+const cup = new THREE.Mesh(new THREE.CylinderGeometry(.12, .09, .22, 10), toon('#5B7FD4'));
+cup.position.set(RX + 6.8, ROOM_Y + 1.02, RZ + 4.3);
+roomG.add(tableTop, tableLeg, cup);
+wordObjects.push({ o: tableTop, ru: 'Стол!', de: 'Der Tisch!' }, { o: tableLeg, ru: 'Стол!', de: 'Der Tisch!' }, { o: cup, ru: 'Чашка!', de: 'Die Tasse!' });
+/* кровать */
+const bedG = new THREE.Group();
+const bedBase = new THREE.Mesh(new THREE.BoxGeometry(1.4, .4, 2.6), toon('#8A5F3C')); bedBase.position.y = .2;
+const bedMatr = new THREE.Mesh(new THREE.BoxGeometry(1.3, .25, 2.4), toon('#F6F0E2')); bedMatr.position.y = .45;
+const pillow = new THREE.Mesh(new THREE.BoxGeometry(1.0, .18, .6), toon('#BFD9F2')); pillow.position.set(0, .6, -.85);
+const blanket = new THREE.Mesh(new THREE.BoxGeometry(1.32, .12, 1.5), toon('#5B7FD4')); blanket.position.set(0, .55, .45);
+bedG.add(bedBase, bedMatr, pillow, blanket);
+bedG.position.set(RX - 10.2, ROOM_Y, RZ + 4);
+roomG.add(bedG);
+wordObjects.push({ o: bedG, ru: 'Кровать!', de: 'Das Bett!', kind: 'bed' });
+/* торшер — включается и выключается */
+const lampPole = new THREE.Mesh(new THREE.CylinderGeometry(.05, .07, 1.7, 8), toon('#6B5A4A'));
+lampPole.position.set(RX + 11, ROOM_Y + .85, RZ - 8);
+const lampShade = new THREE.Mesh(new THREE.ConeGeometry(.5, .6, 12, 1, true), new THREE.MeshBasicMaterial({ color: '#FFE2A8', side: THREE.DoubleSide }));
+lampShade.position.set(RX + 11, ROOM_Y + 1.9, RZ - 8);
+const lampLight = new THREE.PointLight('#FFD9A0', 1.4, 16);
+lampLight.position.set(RX + 11, ROOM_Y + 1.7, RZ - 8);
+const lampBulb = new THREE.Mesh(new THREE.SphereGeometry(.16, 10, 8), new THREE.MeshBasicMaterial({ color: '#FFF3C4' }));
+lampBulb.position.set(RX + 11, ROOM_Y + 1.76, RZ - 8);
+const lampHit = new THREE.Mesh(new THREE.CylinderGeometry(.75, .75, 2.5, 8), new THREE.MeshBasicMaterial({ visible: false }));
+lampHit.position.set(RX + 11, ROOM_Y + 1.25, RZ - 8);
+roomG.add(lampPole, lampShade, lampLight, lampBulb, lampHit);
+[lampShade, lampPole, lampHit].forEach(o => wordObjects.push({ o, ru: 'Лампа!', de: 'Die Lampe!', kind: 'lamp' }));
+/* мяч — катается от пинка */
+const ball = new THREE.Mesh(new THREE.SphereGeometry(.4, 14, 12), toon('#FF8A3D'));
+ball.position.set(RX - 4, ROOM_Y + .4, RZ + 5);
+roomG.add(ball);
+const ballVel = new THREE.Vector2(0, 0);
+wordObjects.push({ o: ball, ru: 'Мяч!', de: 'Der Ball!' });
+/* Дино — хозяин домика, настоящий динозавр */
+const dinoRoom = buildDino(1.05);
+dinoRoom.position.set(RX - 6.8, ROOM_Y, RZ - 5.2);
+dinoRoom.rotation.y = .55;                  // мордой к центру комнаты
+roomG.add(dinoRoom);
+wordObjects.push({ o: dinoRoom, ru: 'Дино!', de: 'Dino!', kind: 'dino' });
+/* коврик-выход */
+const exitPad = new THREE.Mesh(new THREE.CircleGeometry(.75, 20), new THREE.MeshBasicMaterial({ color: '#7FCB42', transparent: true, opacity: .85 }));
+exitPad.rotation.x = -Math.PI/2;
+exitPad.position.set(RX, ROOM_Y + .04, RZ + 8.3);
+/* проём в кухню на правой стене */
+const archLiv = new THREE.Mesh(new THREE.BoxGeometry(.2, 2.6, 1.9), new THREE.MeshBasicMaterial({ color: '#3A2E26' }));
+archLiv.position.set(RX + 11.84, ROOM_Y + 1.3, RZ);
+const archLivFrame = new THREE.Mesh(new THREE.BoxGeometry(.25, 3.0, 2.3), toon('#8A5F3C'));
+archLivFrame.position.set(RX + 11.95, ROOM_Y + 1.5, RZ);
+roomG.add(archLivFrame, archLiv);
+[archLiv, archLivFrame].forEach(o => wordObjects.push({ o, ru: 'Дверь!', de: 'Die Tür!' }));
+/* проём в игровую на левой стене */
+const archPlay = new THREE.Mesh(new THREE.BoxGeometry(.2, 2.6, 1.9), new THREE.MeshBasicMaterial({ color: '#3A2E26' }));
+archPlay.position.set(RX - 11.84, ROOM_Y + 1.3, RZ);
+const archPlayFrame = new THREE.Mesh(new THREE.BoxGeometry(.25, 3.0, 2.3), toon('#8A5F3C'));
+archPlayFrame.position.set(RX - 11.95, ROOM_Y + 1.5, RZ);
+roomG.add(archPlayFrame, archPlay);
+[archPlay, archPlayFrame].forEach(o => wordObjects.push({ o, ru: 'Дверь!', de: 'Die Tür!' }));
+wordObjects.push({ o: exitPad, ru: 'На улицу!', de: 'Nach draußen!' });
+scene.add(roomG);
+
+/* ================= кухня ================= */
+const kitG = new THREE.Group();
+const kitFloor = new THREE.Mesh(new THREE.BoxGeometry(18, .3, 14), toon('#D9B98A'));
+kitFloor.position.set(RX2, ROOM_Y - .15, 0);
+const kwBack = new THREE.Mesh(new THREE.BoxGeometry(18, 5, .3), wallMat);
+kwBack.position.set(RX2, ROOM_Y + 2.5, -7);
+const kwL = new THREE.Mesh(new THREE.BoxGeometry(.3, 5, 14), wallMat);
+kwL.position.set(RX2 - 9, ROOM_Y + 2.5, 0);
+const kwR = kwL.clone(); kwR.position.x = RX2 + 9;
+const archKit = new THREE.Mesh(new THREE.BoxGeometry(.2, 2.6, 1.9), new THREE.MeshBasicMaterial({ color: '#3A2E26' }));
+archKit.position.set(RX2 - 8.84, ROOM_Y + 1.3, 0);
+const archKitFrame = new THREE.Mesh(new THREE.BoxGeometry(.25, 3.0, 2.3), toon('#8A5F3C'));
+archKitFrame.position.set(RX2 - 8.95, ROOM_Y + 1.5, 0);
+kitG.add(kitFloor, kwBack, kwL, kwR, archKitFrame, archKit);
+/* прилавок, плита, холодильник */
+const counterBase = new THREE.Mesh(new THREE.BoxGeometry(6, 1.0, 1.2), toon('#E8DCC4'));
+counterBase.position.set(RX2 - 3, ROOM_Y + .5, -6.35);
+const counterTop = new THREE.Mesh(new THREE.BoxGeometry(6.2, .12, 1.35), toon('#A97B4F'));
+counterTop.position.set(RX2 - 3, ROOM_Y + 1.06, -6.35);
+kitG.add(counterBase, counterTop);
+[counterBase, counterTop].forEach(o => wordObjects.push({ o, ru: 'Стол!', de: 'Der Tisch!' }));
+[kwBack, kwL, kwR].forEach(o => wordObjects.push({ o, ru: 'Стена!', de: 'Die Wand!' }));
+[archKit, archKitFrame].forEach(o => wordObjects.push({ o, ru: 'Дверь!', de: 'Die Tür!' }));
+const stove = new THREE.Mesh(new THREE.BoxGeometry(1.5, 1.1, 1.25), toon('#F4F6F8'));
+stove.position.set(RX2 + 1.6, ROOM_Y + .55, -6.35);
+kitG.add(stove);
+[[-.35, -.3], [.35, -.3], [-.35, .25], [.35, .25]].forEach(([bx, bz]) => {
+  const burner = new THREE.Mesh(new THREE.CylinderGeometry(.18, .18, .04, 12), toon('#2E2E2E'));
+  burner.position.set(RX2 + 1.6 + bx, ROOM_Y + 1.13, -6.35 + bz);
+  kitG.add(burner);
+  wordObjects.push({ o: burner, ru: 'Плита!', de: 'Der Herd!' });
+});
+wordObjects.push({ o: stove, ru: 'Плита!', de: 'Der Herd!' });
+const fridge = new THREE.Mesh(new THREE.BoxGeometry(1.4, 2.5, 1.25), toon('#F4F6F8'));
+fridge.position.set(RX2 - 7.2, ROOM_Y + 1.25, -6.3);
+const fridgeHandle = new THREE.Mesh(new THREE.BoxGeometry(.08, .8, .08), toon('#9AA6B2'));
+fridgeHandle.position.set(RX2 - 6.55, ROOM_Y + 1.5, -5.68);
+kitG.add(fridge, fridgeHandle);
+[fridge, fridgeHandle].forEach(o => wordObjects.push({ o, ru: 'Холодильник!', de: 'Der Kühlschrank!' }));
+/* еда на прилавке — тап, и она летит Дино в рот */
+const foods = [];
+function makeFood(mesh, ru, de, hx, hy, hz) {
+  mesh.position.set(hx, hy, hz);
+  kitG.add(mesh);
+  const f = { mesh, home: new THREE.Vector3(hx, hy, hz), state: 'idle', t0: 0 };
+  foods.push(f);
+  wordObjects.push({ o: mesh, ru, de, kind: 'food', food: f });
+}
+const appleG = new THREE.Group();
+const appleBody = new THREE.Mesh(new THREE.SphereGeometry(.24, 12, 10), toon('#E05548'));
+const appleStem = new THREE.Mesh(new THREE.CylinderGeometry(.025, .025, .14, 6), toon('#5E4428'));
+appleStem.position.y = .26;
+appleG.add(appleBody, appleStem);
+makeFood(appleG, 'Яблоко!', 'Der Apfel!', RX2 - 4.6, ROOM_Y + 1.36, -6.35);
+const banana = new THREE.Mesh(new THREE.TorusGeometry(.26, .09, 8, 14, Math.PI * .95), toon('#F2D24B'));
+banana.rotation.z = Math.PI * .1;
+makeFood(banana, 'Банан!', 'Die Banane!', RX2 - 3, ROOM_Y + 1.3, -6.35);
+const cookie = new THREE.Mesh(new THREE.CylinderGeometry(.22, .22, .09, 14), toon('#C68A4E'));
+makeFood(cookie, 'Печенье!', 'Der Keks!', RX2 - 1.4, ROOM_Y + 1.26, -6.35);
+scene.add(kitG);
+
+/* ================= игровая комната ================= */
+const RX3 = 350;
+const playG = new THREE.Group();
+const playFloor = new THREE.Mesh(new THREE.BoxGeometry(18, .3, 14), toon('#DCC08E'));
+playFloor.position.set(RX3, ROOM_Y - .15, 0);
+const pwBack = new THREE.Mesh(new THREE.BoxGeometry(18, 5, .3), wallMat);
+pwBack.position.set(RX3, ROOM_Y + 2.5, -7);
+const pwL = new THREE.Mesh(new THREE.BoxGeometry(.3, 5, 14), wallMat);
+pwL.position.set(RX3 - 9, ROOM_Y + 2.5, 0);
+const pwR = pwL.clone(); pwR.position.x = RX3 + 9;
+const archP2 = new THREE.Mesh(new THREE.BoxGeometry(.2, 2.6, 1.9), new THREE.MeshBasicMaterial({ color: '#3A2E26' }));
+archP2.position.set(RX3 + 8.84, ROOM_Y + 1.3, 0);
+const archP2Frame = new THREE.Mesh(new THREE.BoxGeometry(.25, 3.0, 2.3), toon('#8A5F3C'));
+archP2Frame.position.set(RX3 + 8.95, ROOM_Y + 1.5, 0);
+playG.add(playFloor, pwBack, pwL, pwR, archP2Frame, archP2);
+[pwBack, pwL, pwR].forEach(o => wordObjects.push({ o, ru: 'Стена!', de: 'Die Wand!' }));
+[archP2, archP2Frame].forEach(o => wordObjects.push({ o, ru: 'Дверь!', de: 'Die Tür!' }));
+/* весёлый ковёр */
+const prug1 = new THREE.Mesh(new THREE.CircleGeometry(3.0, 28), toon('#6CB7E8'));
+prug1.rotation.x = -Math.PI/2; prug1.position.set(RX3, ROOM_Y + .02, -0.5);
+const prug2 = new THREE.Mesh(new THREE.CircleGeometry(2.0, 28), toon('#F2D24B'));
+prug2.rotation.x = -Math.PI/2; prug2.position.set(RX3, ROOM_Y + .03, -0.5);
+const prug3 = new THREE.Mesh(new THREE.CircleGeometry(1.1, 28), toon('#E05548'));
+prug3.rotation.x = -Math.PI/2; prug3.position.set(RX3, ROOM_Y + .04, -0.5);
+playG.add(prug1, prug2, prug3);
+[prug1, prug2, prug3].forEach(o => wordObjects.push({ o, ru: 'Ковёр!', de: 'Der Teppich!' }));
+/* ящик игрушек */
+const toyBox = new THREE.Mesh(new THREE.BoxGeometry(1.7, .95, 1.1), toon('#C96B47'));
+toyBox.position.set(RX3 - 6.5, ROOM_Y + .48, -5.7);
+const toyBoxRim = new THREE.Mesh(new THREE.BoxGeometry(1.85, .14, 1.25), toon('#8A5F3C'));
+toyBoxRim.position.set(RX3 - 6.5, ROOM_Y + .95, -5.7);
+playG.add(toyBox, toyBoxRim);
+[toyBox, toyBoxRim].forEach(o => wordObjects.push({ o, ru: 'Ящик!', de: 'Die Kiste!' }));
+/* мишка */
+const teddyG = new THREE.Group();
+const tdB = new THREE.Mesh(new THREE.SphereGeometry(.5, 12, 10), toon('#A9744A')); tdB.position.y = .5;
+const tdBelly = new THREE.Mesh(new THREE.SphereGeometry(.32, 10, 8), toon('#D8B48A')); tdBelly.position.set(0, .5, .3);
+const tdH = new THREE.Mesh(new THREE.SphereGeometry(.34, 12, 10), toon('#A9744A')); tdH.position.y = 1.15;
+const tdMuz = new THREE.Mesh(new THREE.SphereGeometry(.15, 8, 6), toon('#D8B48A')); tdMuz.position.set(0, 1.08, .28);
+const tdNose = new THREE.Mesh(new THREE.SphereGeometry(.055, 6, 5), toon('#3A2E26')); tdNose.position.set(0, 1.12, .41);
+const tdE1 = new THREE.Mesh(new THREE.SphereGeometry(.05, 6, 5), toon('#26261F')); tdE1.position.set(-.12, 1.24, .3);
+const tdE2 = tdE1.clone(); tdE2.position.x = .12;
+const tdEar1 = new THREE.Mesh(new THREE.SphereGeometry(.13, 8, 6), toon('#A9744A')); tdEar1.position.set(-.24, 1.44, 0);
+const tdEar2 = tdEar1.clone(); tdEar2.position.x = .24;
+const tdArmL = new THREE.Mesh(new THREE.CapsuleGeometry(.1, .3, 4, 6), toon('#A9744A')); tdArmL.position.set(-.5, .62, .1); tdArmL.rotation.z = .8;
+const tdArmR = tdArmL.clone(); tdArmR.position.x = .5; tdArmR.rotation.z = -.8;
+const tdLegL = new THREE.Mesh(new THREE.SphereGeometry(.16, 8, 6), toon('#A9744A')); tdLegL.position.set(-.26, .16, .3);
+const tdLegR = tdLegL.clone(); tdLegR.position.x = .26;
+teddyG.add(tdB, tdBelly, tdH, tdMuz, tdNose, tdE1, tdE2, tdEar1, tdEar2, tdArmL, tdArmR, tdLegL, tdLegR);
+teddyG.position.set(RX3 + 4.6, ROOM_Y, -5.2);
+teddyG.rotation.y = -.5;
+playG.add(teddyG);
+wordObjects.push({ o: teddyG, ru: 'Мишка!', de: 'Der Teddy!', kind: 'teddy' });
+/* кубики — рассыпаются и собираются */
+const CUBE_COLORS = ['#E05548', '#5B7FD4', '#F2D24B', '#6FBC3A'];
+const cubes = [];
+[[0, .28, 0], [.62, .28, .05], [.3, .83, 0], [.3, 1.38, .02]].forEach(([cx, cy, cz], i) => {
+  const c = new THREE.Mesh(new THREE.BoxGeometry(.55, .55, .55), toon(CUBE_COLORS[i]));
+  c.position.set(RX3 - 3.5 + cx, ROOM_Y + cy, -2 + cz);
+  c.userData = { home: c.position.clone(), vel: new THREE.Vector3() };
+  playG.add(c);
+  cubes.push(c);
+  wordObjects.push({ o: c, ru: 'Кубики!', de: 'Die Bausteine!', kind: 'blocks' });
+});
+/* машинка — ездит кругами */
+const carG = new THREE.Group();
+const carBody = new THREE.Mesh(new THREE.BoxGeometry(.95, .3, .5), toon('#E05548')); carBody.position.y = .3;
+const carTop = new THREE.Mesh(new THREE.BoxGeometry(.45, .25, .44), toon('#6CB7E8')); carTop.position.set(-.05, .55, 0);
+carG.add(carBody, carTop);
+[[-.3, .25], [.3, .25], [-.3, -.25], [.3, -.25]].forEach(([wx, wz]) => {
+  const wheel = new THREE.Mesh(new THREE.CylinderGeometry(.14, .14, .1, 10), toon('#3A3A3A'));
+  wheel.rotation.x = Math.PI/2;
+  wheel.position.set(wx, .14, wz);
+  carG.add(wheel);
+});
+const CAR_HOME = new THREE.Vector3(RX3 + 2, ROOM_Y, 2.2);
+carG.position.copy(CAR_HOME);
+playG.add(carG);
+wordObjects.push({ o: carG, ru: 'Машинка!', de: 'Das Auto!', kind: 'car' });
+/* пирамидка */
+const pyrG = new THREE.Group();
+const pyrStick = new THREE.Mesh(new THREE.CylinderGeometry(.05, .05, 1.2, 8), toon('#8A5F3C'));
+pyrStick.position.y = .6;
+pyrG.add(pyrStick);
+const pyrRings = [];
+[['#E05548', .45, .15], ['#F2D24B', .37, .4], ['#6FBC3A', .29, .65], ['#6CB7E8', .21, .9]].forEach(([col, r, y]) => {
+  const ring = new THREE.Mesh(new THREE.TorusGeometry(r, .11, 10, 18), toon(col));
+  ring.rotation.x = Math.PI/2;
+  ring.position.y = y;
+  ring.userData = { baseY: y };
+  pyrG.add(ring);
+  pyrRings.push(ring);
+});
+pyrG.position.set(RX3 - 5.5, ROOM_Y, 2.5);
+playG.add(pyrG);
+wordObjects.push({ o: pyrG, ru: 'Пирамидка!', de: 'Die Pyramide!', kind: 'pyr' });
+/* книжка на полу */
+const bookG = new THREE.Group();
+const page1 = new THREE.Mesh(new THREE.BoxGeometry(.55, .05, .75), toon('#FFFFFF')); page1.position.set(-.26, .08, 0); page1.rotation.z = .3;
+const page2 = page1.clone(); page2.position.x = .26; page2.rotation.z = -.3;
+const cover = new THREE.Mesh(new THREE.BoxGeometry(1.15, .04, .8), toon('#5B7FD4')); cover.position.y = .02;
+bookG.add(cover, page1, page2);
+bookG.position.set(RX3 + 6, ROOM_Y, 3.3);
+bookG.rotation.y = .4;
+playG.add(bookG);
+wordObjects.push({ o: bookG, ru: 'Книжка!', de: 'Das Buch!' });
+scene.add(playG);
+let blocksT = -9, carT = -9, teddyT = -9, pyrT = -9;
+
+function enterPlay() {
+  inPlay = true;
+  hero.position.set(RX3 + 7.6, ROOM_Y, 0);
+  heading = -Math.PI / 2;
+  walkTarget = null; tapRing.visible = false; sitting = false; sitPending = false;
+  dinoRoom.position.set(RX3 - 4.5, ROOM_Y, -4.2);     // Дино прибегает играть
+  dinoBaseRy = .9;
+  blip(700, .12, 'sine', .12, 1000);
+  sayWorld('Игровая!', 'Das Spielzimmer!', clock.elapsedTime);
+}
+function backFromPlay() {
+  inPlay = false;
+  hero.position.set(RX - 10.5, ROOM_Y, RZ);
+  heading = Math.PI / 2;
+  walkTarget = null; tapRing.visible = false;
+  dinoRoom.position.set(RX - 6.8, ROOM_Y, RZ - 5.2);
+  dinoBaseRy = .55;
+  blip(1000, .12, 'sine', .12, 700);
+}
+
+function enterKitchen() {
+  inKitchen = true;
+  hero.position.set(RX2 - 7.6, ROOM_Y, 0);
+  heading = Math.PI / 2;
+  walkTarget = null; tapRing.visible = false; sitting = false; sitPending = false;
+  dinoRoom.position.set(RX2 + 5.2, ROOM_Y, -2.4);     // Дино бежит за Луи на кухню
+  dinoBaseRy = -1.1;
+  blip(600, .12, 'sine', .12, 900);
+  sayWorld('Кухня!', 'Die Küche!', clock.elapsedTime);
+}
+function backToLiving() {
+  inKitchen = false;
+  hero.position.set(RX + 10.5, ROOM_Y, RZ);
+  heading = -Math.PI / 2;
+  walkTarget = null; tapRing.visible = false;
+  dinoRoom.position.set(RX - 6.8, ROOM_Y, RZ - 5.2);
+  dinoBaseRy = .55;
+  blip(900, .12, 'sine', .12, 600);
+}
+
+/* дом в разрезе на тёплом тёмном фоне — улицу не видно сквозь стены */
+const INDOOR_BG = new THREE.Color('#2B2320');
+function setIndoorView(on) {
+  outdoorG.visible = !on;
+  sky.visible = !on;
+  scene.background = on ? INDOOR_BG : null;
+}
+
+function wordFor(obj) {
+  for (const w of wordObjects) {
+    let p = obj;
+    while (p) { if (p === w.o) return w; p = p.parent; }
+  }
+  return null;
+}
+function enterRoom() {
+  indoor = true;
+  setIndoorView(true);
+  outdoorReturn = { x: HX, z: HZ + 3.2 };
+  hero.position.set(RX, ROOM_Y, RZ + 7.4);
+  heading = Math.PI;
+  walkTarget = null; autoWalk = false; tapRing.visible = false;
+  sitting = false; sitPending = false; lying = false; bedPending = false; inKitchen = false;
+  blip(500, .18, 'sine', .14, 260);
+  sayWorld('Домик!', 'Das Haus!', clock.elapsedTime);
+}
+function exitRoom() {
+  indoor = false; inKitchen = false; inPlay = false; sitting = false; sitPending = false; lying = false; bedPending = false;
+  setIndoorView(false);
+  dinoRoom.position.set(RX - 6.8, ROOM_Y, RZ - 5.2);
+  dinoBaseRy = .55;
+  hero.position.set(outdoorReturn.x, hills(outdoorReturn.x, outdoorReturn.z), outdoorReturn.z);
+  heading = 0;
+  walkTarget = null; tapRing.visible = false;
+  blip(260, .18, 'sine', .12, 500);
+}
+
+/* ================= бабочки ================= */
+const flies = [];
+for (let i = 0; i < 7; i++) {
+  const b = new THREE.Group();
+  const wmat = new THREE.MeshBasicMaterial({ color: ['#FFE066', '#FFFFFF', '#FFB7D0'][i % 3], side: THREE.DoubleSide });
+  const w1 = new THREE.Mesh(new THREE.PlaneGeometry(.16, .22), wmat); w1.position.x = -.08;
+  const w2 = new THREE.Mesh(new THREE.PlaneGeometry(.16, .22), wmat); w2.position.x = .08;
+  b.add(w1, w2);
+  const bcx = (Math.random()-.5)*60, bcz = 20 - Math.random()*70;
+  b.userData = { w1, w2, ph: Math.random()*9, cx: bcx, cz: bcz, hx: bcx, hz: bcz, r: 4 + Math.random()*9 };
+  outdoorG.add(b); flies.push(b);
+}
+
+/* два ряда рельефа на горизонте: мягкие зелёные холмы + горы со снегом */
+for (let i = 0; i < 18; i++) {
+  const a = i/18*Math.PI*2 + Math.random()*.2;
+  const r = 165 + Math.random()*35;
+  const h = 14 + Math.random()*16;
+  const hill = new THREE.Mesh(new THREE.SphereGeometry(40+Math.random()*28, 10, 8), toon('#6FA054'));
+  hill.position.set(Math.cos(a)*r, -hill.geometry.parameters.radius + h, Math.sin(a)*r);
+  hill.scale.y = .9;
+  outdoorG.add(hill);
+}
+for (let i = 0; i < 14; i++) {
+  const a = i/14*Math.PI*2 + .2 + Math.random()*.2;
+  const r = 235 + Math.random()*50;
+  const x = Math.cos(a)*r, z = Math.sin(a)*r;
+  const h = 42 + Math.random()*36;
+  const m = new THREE.Mesh(new THREE.ConeGeometry(55+Math.random()*30, h, 7), toon('#5F7A58'));
+  m.position.set(x, h/2-10, z);
+  m.rotation.y = Math.random();
+  m.scale.x = .85 + Math.random()*.6;
+  outdoorG.add(m);
+  const snow = new THREE.Mesh(new THREE.ConeGeometry(13, h*.24, 7), toon('#F4EFF2'));
+  snow.position.set(x, h-10-h*.12, z);
+  snow.rotation.y = m.rotation.y;
+  snow.scale.x = m.scale.x;
+  outdoorG.add(snow);
+}
+
+/* облака */
+const cloudTex = (() => {
+  const cv = document.createElement('canvas'); cv.width = cv.height = 128;
+  const ctx = cv.getContext('2d');
+  const g = ctx.createRadialGradient(64,64,10, 64,64,64);
+  g.addColorStop(0, 'rgba(255,255,255,.95)');
+  g.addColorStop(.6, 'rgba(255,250,250,.55)');
+  g.addColorStop(1, 'rgba(255,250,250,0)');
+  ctx.fillStyle = g; ctx.fillRect(0,0,128,128);
+  return new THREE.CanvasTexture(cv);
+})();
+const clouds = [];
+for (let i = 0; i < 10; i++) {
+  const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: cloudTex, transparent: true, opacity: .9, fog: false }));
+  sp.scale.set(60+Math.random()*50, 24+Math.random()*16, 1);
+  sp.position.set((Math.random()-.5)*500, 55+Math.random()*35, (Math.random()-.5)*500);
+  outdoorG.add(sp); clouds.push(sp);
+}
+/* тени облаков плывут по лугу */
+const cloudShadows = [];
+clouds.forEach(sp => {
+  if (Math.abs(sp.position.z) > 150 || cloudShadows.length >= 6) return;
+  const sh = new THREE.Mesh(
+    new THREE.PlaneGeometry(sp.scale.x * .8, sp.scale.y * .8),
+    new THREE.MeshBasicMaterial({ map: cloudTex, transparent: true, opacity: .12, color: '#16260E', depthWrite: false })
+  );
+  sh.rotation.x = -Math.PI/2;
+  outdoorG.add(sh);
+  cloudShadows.push({ sh, sp });
+});
+
+/* ================= герой ================= */
+/* герой — маленький Луи: золотистые волосы с чёлкой, голубая футболка, белые кроссовки */
+const hero = new THREE.Group();
+function legFactory(sx) {
+  const g = new THREE.Group();
+  const leg = new THREE.Mesh(new THREE.CapsuleGeometry(.075, .26, 2, 6), toon('#F2C9A8'));
+  leg.position.y = -.14;
+  const shoe = new THREE.Mesh(new THREE.SphereGeometry(.10, 8, 6), toon('#F6F4EF'));
+  shoe.scale.set(1, .7, 1.35);
+  shoe.position.set(0, -.30, .04);
+  g.add(leg, shoe);
+  g.position.set(sx, .44, 0);
+  return g;
+}
+const legL = legFactory(-.12), legR = legFactory(.12);
+const shorts = new THREE.Mesh(new THREE.CylinderGeometry(.24, .26, .2, 10), toon('#4A5568'));
+shorts.position.y = .46;
+const body = new THREE.Mesh(new THREE.CylinderGeometry(.21, .25, .5, 10), toon('#9DBFEA'));
+body.position.y = .72;
+const armL = new THREE.Mesh(new THREE.CapsuleGeometry(.06, .26, 2, 6), toon('#9DBFEA'));
+armL.position.set(-.30, .78, 0); armL.rotation.z = .25;
+const armR = armL.clone(); armR.position.x = .30; armR.rotation.z = -.25;
+const head = new THREE.Mesh(new THREE.SphereGeometry(.29, 14, 12), toon('#F2C9A8'));
+head.position.y = 1.22;
+const hair = new THREE.Mesh(new THREE.SphereGeometry(.31, 14, 12), toon('#F0D27E'));
+hair.scale.set(1, .9, 1);
+hair.position.set(0, 1.32, -.05);
+const fringe = new THREE.Mesh(new THREE.SphereGeometry(.13, 10, 8), toon('#F0D27E'));
+fringe.scale.set(1.7, .55, .8);
+fringe.position.set(0, 1.38, .22);
+const capeGeo = new THREE.PlaneGeometry(.5, .55, 4, 6);
+const cape = new THREE.Mesh(capeGeo, new THREE.MeshToonMaterial({ color: '#5B7FD4', gradientMap: toonTex, side: THREE.DoubleSide }));
+cape.position.set(0, .9, -.22);
+cape.rotation.x = .25;
+hero.add(legL, legR, shorts, body, armL, armR, head, hair, fringe, cape);
+scene.add(hero);
+
+/* ===== настоящая скелетная модель (KayKit Adventurers, CC0), перекрашенная под Луи ===== */
+let mixer = null, actions = {}, curAction = null, modelLoaded = false, pendingNext = null;
+function playAnim(name, fade = .25, once = false, next = null) {
+  const a = actions[name];
+  if (!a || curAction === a) return;
+  a.reset();
+  if (once) { a.setLoop(THREE.LoopOnce); a.clampWhenFinished = true; pendingNext = next; }
+  if (curAction) a.crossFadeFrom(curAction, fade, false);
+  a.play();
+  curAction = a;
+}
+function rgb2hsl(r, g, b) {
+  r /= 255; g /= 255; b /= 255;
+  const mx = Math.max(r, g, b), mn = Math.min(r, g, b), l = (mx + mn) / 2;
+  if (mx === mn) return [0, 0, l];
+  const d = mx - mn;
+  const s = l > .5 ? d / (2 - mx - mn) : d / (mx + mn);
+  let h = mx === r ? (g - b) / d + (g < b ? 6 : 0) : mx === g ? (b - r) / d + 2 : (r - g) / d + 4;
+  return [h * 60, s, l];
+}
+function hsl2rgb(h, s, l) {
+  h /= 360;
+  const q = l < .5 ? l * (1 + s) : l + s - l * s, p = 2 * l - q;
+  const f = t => {
+    t = (t + 1) % 1;
+    if (t < 1/6) return p + (q - p) * 6 * t;
+    if (t < 1/2) return q;
+    if (t < 2/3) return p + (q - p) * (2/3 - t) * 6;
+    return p;
+  };
+  return [f(h + 1/3) * 255, f(h) * 255, f(h - 1/3) * 255];
+}
+function louisify(tex) { // зелёная туника → голубая футболка, каштановые волосы → блонд
+  const img = tex.image;
+  const cv = document.createElement('canvas');
+  cv.width = img.width; cv.height = img.height;
+  const c2 = cv.getContext('2d');
+  c2.drawImage(img, 0, 0);
+  const d = c2.getImageData(0, 0, cv.width, cv.height), p = d.data;
+  for (let i = 0; i < p.length; i += 4) {
+    const [h, s, l] = rgb2hsl(p[i], p[i+1], p[i+2]);
+    let out = null;
+    if (h > 70 && h < 195 && s > .2) out = hsl2rgb(213, s * .55, Math.min(.82, l * 1.3 + .08));
+    else if (h >= 10 && h <= 45 && s > .25 && l < .62) out = hsl2rgb(43, .8, Math.min(.60, l * 1.18 + .06));
+    if (out) { p[i] = out[0]; p[i+1] = out[1]; p[i+2] = out[2]; }
+  }
+  c2.putImageData(d, 0, 0);
+  const t = new THREE.CanvasTexture(cv);
+  t.flipY = tex.flipY;
+  t.colorSpace = tex.colorSpace;
+  return t;
+}
+new GLTFLoader().load('assets/Rogue.wasm', g => {   // .wasm — потому что артефакты не раздают .glb; внутри обычный glTF
+  const model = g.scene;
+  const HIDE = ['Knife', 'Knife_Offhand', '1H_Crossbow', '2H_Crossbow', 'Throwable'];
+  let mat = null;
+  model.traverse(o => {
+    if (HIDE.includes(o.name)) o.visible = false;
+    if (o.isMesh || o.isSkinnedMesh) {
+      o.frustumCulled = false;
+      if (!mat && o.material && o.material.map) mat = o.material;
+    }
+  });
+  if (mat) { mat.map = louisify(mat.map); mat.needsUpdate = true; }
+  const size = new THREE.Box3().setFromObject(model).getSize(new THREE.Vector3());
+  model.scale.setScalar(1.35 / size.y);
+  mixer = new THREE.AnimationMixer(model);
+  ['Idle', 'Walking_B', 'Running_A', 'Cheer', 'Sit_Chair_Down', 'Sit_Chair_Idle', 'Sit_Chair_StandUp', 'Lie_Down', 'Lie_Idle', 'Lie_StandUp'].forEach(n => {
+    const c = g.animations.find(a => a.name === n);
+    if (c) actions[n] = mixer.clipAction(c);
+  });
+  mixer.addEventListener('finished', () => {
+    const nx = pendingNext; pendingNext = null; curAction = null;
+    playAnim(nx || 'Idle', .2);
+  });
+  hero.clear();                      // примитивный Луи уступает место скелетному
+  hero.add(model);
+  modelLoaded = true;
+  playAnim('Idle');
+}, undefined, () => { /* не загрузилось — остаёмся с примитивным Луи */ });
+
+hero.position.set(pathX(30), 0, 30);
+let heading = Math.PI;              // лицом к деревне (−z)
+let camYaw = heading;
+
+/* ================= управление: тап-иди, джойстик, клавиши ================= */
+const keys = {};
+let joy = null;                 // {id, sx, sy, dx, dy, drag} — ровно ОДИН палец
+let walkTarget = null;          // {x, z} — куда идёт Луи сам
+let autoWalk = false;           // «заскучал — пошёл сам по тропинке»
+let userActed = false;          // был ввод в этом кадре (сбрасывает таймер скуки)
+let introDone = false, introP = 0, introFast = false;
+let spoke = false;
+let resetIdle = false;
+
+const joyBase = document.getElementById('joyBase'), joyKnob = document.getElementById('joyKnob');
+const hintEl = document.getElementById('hint');
+hintEl.textContent = matchMedia('(pointer: coarse)').matches
+  ? 'Тапни на полянку — Луи пойдёт сам'
+  : 'Кликни по полянке — Луи пойдёт · или WASD/стрелки';
+const ray = new THREE.Raycaster();
+
+function ensureAudio() {
+  if (!audioCtx) { try { audioCtx = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) {} }
+  if (audioCtx && audioCtx.state !== 'running') audioCtx.resume();
+}
+function firstGesture() {
+  ensureAudio();
+  if (spoke) return;
+  spoke = true;
+  try {
+    speechSynthesis.cancel();
+    speechSynthesis.speak(new SpeechSynthesisUtterance(''));   // разблокировать речь жестом
+    if (pendingGreet) { pendingGreet = false; setTimeout(greet, 250); return; }
+    const u1 = new SpeechSynthesisUtterance('Идём в гости к Дино!');
+    u1.lang = 'ru-RU'; u1.pitch = 1.25; u1.rate = .92;
+    const u2 = new SpeechSynthesisUtterance('Gehen wir zu Dino!');
+    u2.lang = 'de-DE'; u2.pitch = 1.25; u2.rate = .92;
+    speechSynthesis.speak(u1); speechSynthesis.speak(u2);
+  } catch (e) {}
+}
+function tapToGo(cx, cy) {
+  ray.setFromCamera(new THREE.Vector2(cx/innerWidth*2 - 1, -(cy/innerHeight)*2 + 1), camera);
+  if (doorAnim > .5) {                              // потрогал Дино — хихикает
+    const dh = ray.intersectObject(dinoHead, true);
+    if (dh.length) {
+      dinoGig = clock.elapsedTime;
+      blip(700, .12, 'sine', .2, 1100); blip(950, .14, 'sine', .18, 1400);
+      sayWorld('Дино!', 'Dino!', clock.elapsedTime);
+      return;
+    }
+  }
+  if (indoor) {                                    // в комнате каждая вещь называет себя
+    const hitsW = ray.intersectObjects(wordObjects.map(w => w.o), true);
+    if (hitsW.length) {
+      const w = wordFor(hitsW[0].object);
+      if (w) {
+        const tn = clock.elapsedTime;
+        if (w.kind === 'lamp') {
+          lampOn = !lampOn;
+          lampLight.intensity = lampOn ? 1.4 : 0;
+          lampShade.material.color.set(lampOn ? '#FFE2A8' : '#8E8273');
+          lampBulb.visible = lampOn;
+          blip(lampOn ? 900 : 500, .07, 'square', .12, lampOn ? 1500 : 320);   // щёлк!
+        }
+        if (w.kind === 'dino') {
+          dinoRoomGig = tn;
+          blip(700, .12, 'sine', .2, 1100); blip(950, .14, 'sine', .18, 1400);
+        }
+        if (w.kind === 'sofa') {
+          sitPending = true;
+          sitSpot = { x: RX + 8.45, z: RZ - 5.5, ry: -Math.PI/2, oy: .18 };
+          walkTarget = { x: RX + 7.4, z: RZ - 5.5 };
+          tapRing.visible = false;
+        }
+        if (w.kind === 'chair') {
+          sitPending = true;
+          sitSpot = { x: RX + 4.9, z: RZ + 4.5, ry: Math.PI/2, oy: .5 };
+          walkTarget = { x: RX + 3.9, z: RZ + 4.5 };
+          tapRing.visible = false;
+        }
+        if (w.kind === 'bed') {
+          bedPending = true;
+          walkTarget = { x: RX - 9.0, z: RZ + 4 };
+          tapRing.visible = false;
+        }
+        if (w.kind === 'food' && w.food.state === 'idle') {
+          w.food.state = 'fly';
+          w.food.t0 = clock.elapsedTime;
+        }
+        if (w.kind === 'blocks') {
+          blocksT = clock.elapsedTime;
+          cubes.forEach(c => c.userData.vel.set((Math.random()-.5)*5, 2.5 + Math.random()*2.5, (Math.random()-.5)*5));
+          blip(500, .08, 'square', .12, 300); blip(380, .1, 'square', .1, 220);
+        }
+        if (w.kind === 'car') {
+          carT = clock.elapsedTime;
+          blip(90, .25, 'sawtooth', .1, 160);
+        }
+        if (w.kind === 'teddy') {
+          teddyT = clock.elapsedTime;
+          blip(600, .12, 'sine', .14, 900);
+        }
+        if (w.kind === 'pyr') {
+          pyrT = clock.elapsedTime;
+          [660, 784, 880, 1047].forEach((f, i) => setTimeout(() => blip(f, .14, 'triangle', .1), i * 90));
+        }
+        blip(880, .07, 'triangle', .1);
+        sayWorld(w.ru, w.de, tn);
+        if (w.kind) return;
+        // вещь без особого действия: слово сказано, а тап дальше работает как «иди сюда»
+      }
+    }
+  }
+  const hit = ray.intersectObject(indoor ? (inKitchen ? kitFloor : inPlay ? playFloor : roomFloor) : rayGround)[0];
+  if (!hit) return;
+  let tx, tz;
+  if (indoor && inKitchen) {
+    tx = THREE.MathUtils.clamp(hit.point.x, RX2 - 8.3, RX2 + 8.3);
+    tz = THREE.MathUtils.clamp(hit.point.z, -6.3, 6.5);
+  } else if (indoor && inPlay) {
+    tx = THREE.MathUtils.clamp(hit.point.x, RX3 - 8.3, RX3 + 8.3);
+    tz = THREE.MathUtils.clamp(hit.point.z, -6.3, 6.5);
+  } else if (indoor) {
+    tx = THREE.MathUtils.clamp(hit.point.x, RX - 11.2, RX + 11.2);
+    tz = THREE.MathUtils.clamp(hit.point.z, RZ - 8.2, RZ + 8.8);
+  } else {
+    tx = THREE.MathUtils.clamp(hit.point.x, -110, 110);
+    tz = THREE.MathUtils.clamp(hit.point.z, -140, 70);
+    const ddx = tx - hero.position.x, ddz = tz - hero.position.z;
+    const dlen = Math.hypot(ddx, ddz);
+    if (dlen > 35) { tx = hero.position.x + ddx/dlen*35; tz = hero.position.z + ddz/dlen*35; } // тап в горизонт ≠ поход на минуту
+  }
+  walkTarget = { x: tx, z: tz };
+  autoWalk = false;
+  tapRing.position.set(tx, (indoor ? ROOM_Y : hills(tx, tz)) + .06, tz);
+  tapRing.visible = true;
+}
+
+addEventListener('keydown', e => { keys[e.code] = true; userActed = true; introFast = true; firstGesture(); });
+addEventListener('keyup', e => keys[e.code] = false);
+addEventListener('pointerdown', e => {
+  if (joy) return;                                     // второй палец/ладонь игнорируем
+  joy = { id: e.pointerId, sx: e.clientX, sy: e.clientY, dx: 0, dy: 0, drag: false };
+  userActed = true; introFast = true; firstGesture();
+});
+addEventListener('pointermove', e => {
+  if (!joy || e.pointerId !== joy.id) return;
+  joy.dx = e.clientX - joy.sx; joy.dy = e.clientY - joy.sy;
+  const len = Math.hypot(joy.dx, joy.dy);
+  if (!joy.drag && len > 22) {                         // джойстик появляется, когда реально поехал
+    joy.drag = true;
+    joyBase.style.display = joyKnob.style.display = 'block';
+    joyBase.style.left = joy.sx + 'px'; joyBase.style.top = joy.sy + 'px';
+  }
+  if (joy.drag) {
+    const max = 40, k = len > max ? max/len : 1;
+    joyKnob.style.left = (joy.sx + joy.dx*k) + 'px';
+    joyKnob.style.top = (joy.sy + joy.dy*k) + 'px';
+  }
+  userActed = true;
+});
+function endPointer(e) {
+  if (!joy || (e && e.pointerId !== joy.id)) return;
+  if (!joy.drag && e) tapToGo(e.clientX, e.clientY);   // тап = отпустил, не сдвинув; держать можно сколько угодно
+  joy = null;
+  joyBase.style.display = joyKnob.style.display = 'none';
+}
+addEventListener('pointerup', endPointer);
+addEventListener('pointercancel', e => { if (joy && e.pointerId === joy.id) { joy = null; joyBase.style.display = joyKnob.style.display = 'none'; } });
+
+/* свернули вкладку / ушёл фокус — отпустить всё, не дёргаться при возврате */
+function resetInput() {
+  for (const k in keys) keys[k] = false;
+  joy = null;
+  joyBase.style.display = joyKnob.style.display = 'none';
+  resetIdle = true;
+}
+addEventListener('blur', resetInput);
+document.addEventListener('visibilitychange', () => {
+  resetInput();
+  if (document.hidden) { try { speechSynthesis.cancel(); } catch (e) {} }
+});
+
+/* ================= цикл ================= */
+const clock = new THREE.Clock();
+let runPhase = 0;
+let lastInput = 0;
+const INTRO_LEN = 3.4;
+let hintDeadline = Infinity, hintGone = false;
+let prevStepSin = 0, dinoGig = -9;
+window.__pos = () => ({ x: +hero.position.x.toFixed(1), z: +hero.position.z.toFixed(1), door: +doorAnim.toFixed(2),
+  open: doorOpen, dd: +Math.hypot(hero.position.x - HX, hero.position.z - (HZ + 1.8)).toFixed(2), frames: window.__fc || 0,
+  target: walkTarget, auto: autoWalk, intro: introDone });
+window.__tp = (x, z) => { hero.position.set(x, hills(x, z), z); };
+window.__tap = (cx, cy) => tapToGo(cx, cy);
+window.__probe = (cx, cy) => {
+  ray.setFromCamera(new THREE.Vector2(cx/innerWidth*2 - 1, -(cy/innerHeight)*2 + 1), camera);
+  const h = ray.intersectObjects(wordObjects.map(w => w.o), true);
+  return h.slice(0, 3).map(x => (x.object.name || x.object.type) + '→' + (wordFor(x.object) ? wordFor(x.object).ru : '???') + '@' + x.distance.toFixed(1));
+};
+
+function frame() {
+  requestAnimationFrame(frame);
+  window.__fc = (window.__fc || 0) + 1;
+  const dt = Math.min(clock.getDelta(), .05);
+  const t = clock.elapsedTime;
+  grassMat.uniforms.uTime.value = t;
+  grassMat.uniforms.uHero.value.copy(hero.position);
+  fMat.uniforms.uTime.value = t;
+  blades.rotation.z += dt*.8;
+  clouds.forEach((c, i) => { c.position.x += dt*(1+i%3); if (c.position.x > 300) c.position.x = -300; });
+  cloudShadows.forEach(({ sh, sp }) => {
+    const sx = sp.position.x * .85, sz = sp.position.z * .85;
+    sh.position.set(sx, hills(sx, sz) + .55, sz);
+  });
+
+  /* ввод */
+  if (userActed) { lastInput = t; userActed = false; }
+  if (resetIdle) { lastInput = t; resetIdle = false; }
+  let ix = 0, iz = 0;
+  if (keys.KeyW || keys.ArrowUp) iz -= 1;
+  if (keys.KeyS || keys.ArrowDown) iz += 1;
+  if (keys.KeyA || keys.ArrowLeft) ix -= 1;
+  if (keys.KeyD || keys.ArrowRight) ix += 1;
+  if (joy && joy.drag) {
+    ix = THREE.MathUtils.clamp(joy.dx/60, -1, 1);
+    iz = THREE.MathUtils.clamp(joy.dy/60, -1, 1);
+  }
+  const manual = !!(ix || iz);
+  if (manual) { walkTarget = null; autoWalk = false; tapRing.visible = false; }
+
+  /* заскучал на 6 секунд — Луи сам идёт по тропинке к домику */
+  const dHouseNow = Math.hypot(hero.position.x - HX, hero.position.z - (HZ + 1.8));
+  if (!indoor && !manual && !walkTarget && introDone && !doorOpen && dHouseNow > 4 && t - lastInput > 6) {
+    autoWalk = true;
+    const wz = hero.position.z - 12;
+    walkTarget = wz <= HZ + 4 ? { x: HX, z: HZ + 2.2 }      // финальный шаг — к самой двери
+                              : { x: pathX(wz), z: wz };
+  }
+
+  if ((sitting || lying) && (manual || walkTarget)) {   // встаём с дивана / просыпаемся
+    if (modelLoaded) playAnim(lying ? 'Lie_StandUp' : 'Sit_Chair_StandUp', .15, true);
+    if (lying) {
+      hero.position.set(RX - 9.0, ROOM_Y, RZ + 4);
+      sayWorld('Доброе утро!', 'Guten Morgen!', t);
+    }
+    sitting = false; lying = false;
+  }
+  let moving = false, sp = indoor ? 4.6 : 5.2;
+  if (manual) {
+    // в комнате камера неподвижна → направления экранные («вверх» = вглубь), без camYaw
+    const dir = indoor ? Math.atan2(ix, iz) : (Math.atan2(ix, iz) + camYaw + Math.PI);
+    let d = dir - heading;
+    while (d > Math.PI) d -= 2*Math.PI;
+    while (d < -Math.PI) d += 2*Math.PI;
+    heading += d * Math.min(1, dt*10);
+    moving = true;
+  } else if (walkTarget) {
+    const dx = walkTarget.x - hero.position.x, dz = walkTarget.z - hero.position.z;
+    const dist = Math.hypot(dx, dz);
+    if (dist < .7) {
+      walkTarget = null; tapRing.visible = false;
+      if (sitPending && sitSpot) {                 // дошёл до дивана или стула — садимся
+        sitPending = false; sitting = true;
+        hero.position.set(sitSpot.x, ROOM_Y, sitSpot.z);
+        heading = sitSpot.ry;
+        if (modelLoaded) playAnim('Sit_Chair_Down', .2, true, 'Sit_Chair_Idle');
+      }
+      if (bedPending) {                            // дошёл до кровати — ложимся спать
+        bedPending = false; lying = true;
+        hero.position.set(RX - 10.1, ROOM_Y, RZ + 3.7);
+        heading = 0;
+        if (modelLoaded) playAnim('Lie_Down', .25, true, 'Lie_Idle');
+        lampOn = false; lampLight.intensity = 0; lampShade.material.color.set('#B8A88E');
+        lullNext = t + 1.2; lullIdx = 0;
+        sayWorld('Спокойной ночи!', 'Gute Nacht!', t);
+      }
+    } else {
+      const dir = Math.atan2(dx, dz);
+      let d = dir - heading;
+      while (d > Math.PI) d -= 2*Math.PI;
+      while (d < -Math.PI) d += 2*Math.PI;
+      heading += d * Math.min(1, dt*8);
+      moving = true;
+      sp = autoWalk ? 2.8 : 4.6;
+    }
+  }
+  if (sitting || lying) moving = false;            // сидим или спим — не шагаем
+  if (moving) {
+    hero.position.x += Math.sin(heading)*sp*dt;
+    hero.position.z += Math.cos(heading)*sp*dt;
+    if (indoor) {
+      if (inKitchen) {
+        hero.position.x = THREE.MathUtils.clamp(hero.position.x, RX2 - 8.5, RX2 + 8.4);
+        hero.position.z = THREE.MathUtils.clamp(hero.position.z, -6.4, 6.6);
+        if (hero.position.x < RX2 - 8.2 && Math.abs(hero.position.z) < 1.4) backToLiving();
+      } else if (inPlay) {
+        hero.position.x = THREE.MathUtils.clamp(hero.position.x, RX3 - 8.4, RX3 + 8.5);
+        hero.position.z = THREE.MathUtils.clamp(hero.position.z, -6.4, 6.6);
+        if (hero.position.x > RX3 + 8.2 && Math.abs(hero.position.z) < 1.4) backFromPlay();
+      } else {
+        hero.position.x = THREE.MathUtils.clamp(hero.position.x, RX - 11.3, RX + 11.3);
+        hero.position.z = THREE.MathUtils.clamp(hero.position.z, RZ - 8.3, RZ + 9.3);
+        if (hero.position.z > RZ + 8.6) exitRoom();                 // вышел через открытую сторону
+        if (hero.position.x > RX + 11.0 && Math.abs(hero.position.z - RZ) < 1.2) enterKitchen();
+        if (hero.position.x < RX - 11.0 && Math.abs(hero.position.z - RZ) < 1.2) enterPlay();
+      }
+    } else {
+      hero.position.x = THREE.MathUtils.clamp(hero.position.x, -110, 110);
+      hero.position.z = THREE.MathUtils.clamp(hero.position.z, -140, 70);
+      const hcx = hero.position.x - HX, hcz = hero.position.z - HZ;
+      if (Math.abs(hcx) < 2.2 && Math.abs(hcz) < 2.0) {
+        if (doorAnim > .75 && Math.abs(hcx) < 1.0 && hcz > 0) enterRoom();   // дверь открыта — заходим!
+        else {
+          if (Math.abs(hcx) > Math.abs(hcz) * 1.1) hero.position.x = HX + Math.sign(hcx) * 2.2;
+          else hero.position.z = HZ + Math.sign(hcz) * 2.0;
+          walkTarget = null; tapRing.visible = false;
+        }
+      }
+    }
+    runPhase += dt*(sp > 4 ? 11 : 7);
+  } else {
+    runPhase += dt*2;
+  }
+  hero.position.y = indoor ? ROOM_Y + (sitting ? (sitSpot ? sitSpot.oy : .18) : lying ? .55 : 0) : hills(hero.position.x, hero.position.z);
+  hero.rotation.y = heading;
+
+  /* бег: ноги, подпрыгивание, плащ */
+  if (modelLoaded) {
+    mixer.update(dt);
+    const busy = curAction && curAction.loop === THREE.LoopOnce && curAction.isRunning();
+    if (!busy && !sitting) {
+      if (moving) playAnim(sp > 4 ? 'Running_A' : 'Walking_B');
+      else playAnim('Idle');
+    }
+  } else {
+    const swing = moving ? Math.sin(runPhase)*.75 : Math.sin(runPhase)*.06;
+    legL.rotation.x = swing; legR.rotation.x = -swing;
+    armL.rotation.x = -swing*.7; armR.rotation.x = swing*.7;
+    hero.position.y += moving ? Math.abs(Math.sin(runPhase))*.08 : 0;
+    body.rotation.x = moving ? .1 : 0;
+    const cp = capeGeo.attributes.position;
+    for (let i = 0; i < cp.count; i++) {
+      const yy = cp.getY(i);
+      const amp = (0.3 - yy) * (moving ? .18 : .07);
+      cp.setZ(i, Math.sin(t*7 + yy*5 + cp.getX(i)*3) * amp - (moving ? (0.3-yy)*.5 : 0));
+    }
+    cp.needsUpdate = true;
+    capeGeo.computeVertexNormals();
+  }
+
+  /* домик: подошёл — тук-тук, дверь открывается, Дино выглядывает и здоровается */
+  const dd = Math.hypot(hero.position.x - HX, hero.position.z - (HZ + 1.8));
+  if (!indoor && !doorOpen && dd < 3.2) {
+    doorOpen = true; knockT = t;
+    walkTarget = null; autoWalk = false; tapRing.visible = false;   // гасим цель ОДИН раз, тапы дальше живут
+    knockSfx();
+    if (modelLoaded) playAnim('Cheer', .2, true);                   // Луи радуется встрече
+    setTimeout(greet, 700);
+  }
+  if (doorOpen && dd > 9) doorOpen = false;   // ушёл — дверь закрылась, можно стучать снова
+  const doorTarget = (doorOpen && t - knockT > .55) ? 1 : 0;
+  doorAnim += (doorTarget - doorAnim) * Math.min(1, dt*3);
+  doorPivot.rotation.y = -1.9 * doorAnim;
+  dinoHead.position.z = .9 + 1.5 * doorAnim;
+  dinoHead.position.y = 1.15 + Math.sin(t*3)*.07*doorAnim;
+  dinoHead.rotation.z = Math.sin(t*2.5)*.12*doorAnim;
+  const gig = Math.max(0, 1 - (t - dinoGig)*1.3);
+  dinoHead.scale.setScalar(1 + .25 * Math.sin((t - dinoGig)*15) * gig);
+
+  /* маркеры: стрелка над домиком (растёт с расстоянием, возвращается после визита) */
+  goalMarker.visible = !doorOpen && !indoor;
+  goalMarker.scale.setScalar(THREE.MathUtils.clamp(dHouseNow / 18, 1, 3));
+  goalMarker.position.y = hills(HX, HZ) + 5.4 + Math.abs(Math.sin(t*2.2))*.7;
+  goalMarker.rotation.y = t*1.5;
+
+  /* облачко с приветствием, пока дверь открыта */
+  bubble.visible = doorAnim > .6 && !indoor;
+  bubble.position.set(HX + .4, hills(HX, HZ) + 3.2 + Math.sin(t*2)*.08, HZ + 2.4);
+  if (tapRing.visible) {
+    const ps = 1 + Math.sin(t*6)*.18;
+    tapRing.scale.set(ps, ps, 1);
+  }
+
+  /* бабочки: разлетаются от Луи и возвращаются домой */
+  flies.forEach(f => {
+    const u = f.userData;
+    const a = t*.5 + u.ph;
+    let fx = u.cx + Math.cos(a)*u.r, fz = u.cz + Math.sin(a*1.3)*u.r;
+    const dxh = fx - hero.position.x, dzh = fz - hero.position.z;
+    const dh = Math.hypot(dxh, dzh) || .01;
+    if (dh < 2.2) {
+      u.cx += dxh/dh * 14 * dt; u.cz += dzh/dh * 14 * dt;
+      if (dh < 1.6) sayWorld('Бабочка!', 'Der Schmetterling!', t);
+    } else {
+      u.cx += (u.hx - u.cx) * dt * .25;
+      u.cz += (u.hz - u.cz) * dt * .25;
+    }
+    fx = u.cx + Math.cos(a)*u.r; fz = u.cz + Math.sin(a*1.3)*u.r;
+    f.position.set(fx, hills(fx, fz) + 1.1 + Math.sin(t*1.3+u.ph)*.4, fz);
+    const fl = Math.sin(t*14 + u.ph)*.9;
+    u.w1.rotation.y = fl; u.w2.rotation.y = -fl;
+    f.rotation.y = -a;
+  });
+
+  /* деревья: толкнул — трясётся, роняет листья и называет себя */
+  treeList.forEach(tr => {
+    const d = Math.hypot(hero.position.x - tr.x, hero.position.z - tr.z);
+    if (d < 1.5 && t - tr.cool > 2.5) {
+      tr.cool = t; tr.wig = t;
+      spawnLeaves(tr.x, hills(tr.x, tr.z) + 1.8*tr.s, tr.z, 4);
+      blip(1300, .08, 'triangle', .07, 500); blip(900, .1, 'triangle', .06, 400);
+      sayWorld('Дерево!', 'Der Baum!', t);
+    }
+    const age = t - tr.wig;
+    tr.g.rotation.z = age < .9 ? Math.sin(age*16) * .09 * (1 - age/.9) : 0;
+  });
+  for (let i = leaves.length - 1; i >= 0; i--) {
+    const L = leaves[i];
+    L.life -= dt;
+    L.m.position.x += L.vx*dt; L.m.position.y += L.vy*dt; L.m.position.z += L.vz*dt;
+    L.m.rotation.z += L.rs*dt; L.m.rotation.x += L.rs*.6*dt;
+    if (L.life < 0 || L.m.position.y < hills(L.m.position.x, L.m.position.z)) { outdoorG.remove(L.m); leaves.splice(i, 1); }
+  }
+
+  /* шаги: мягко по траве, глухо по тропинке */
+  const stepSin = Math.sin(runPhase);
+  if (moving && Math.sign(stepSin) !== Math.sign(prevStepSin)) {
+    if (Math.abs(hero.position.x - pathX(hero.position.z)) < 1.5) blip(110, .05, 'sine', .09);
+    else blip(1500, .05, 'triangle', .045, 500);
+  }
+  prevStepSin = stepSin;
+
+  /* жизнь комнаты: огонь, мяч, Дино */
+  if (indoor) {
+    flame1.scale.set(1 + Math.sin(t*11)*.15, 1 + Math.sin(t*13+1)*.25, 1);
+    flame2.scale.set(1 + Math.sin(t*15+2)*.2, 1 + Math.sin(t*17)*.3, 1);
+    fireLight.intensity = 1.0 + Math.sin(t*12)*.25;
+    if (Math.random() < dt*.8) blip(2200 + Math.random()*800, .03, 'triangle', .02);  // потрескивание
+    const bdx = ball.position.x - hero.position.x, bdz = ball.position.z - hero.position.z;
+    const bd = Math.hypot(bdx, bdz) || .01;
+    if (bd < .75 && !sitting) {
+      ballVel.set(bdx/bd*4.2, bdz/bd*4.2);
+      blip(300, .08, 'sine', .12, 150);
+      sayWorld('Мяч!', 'Der Ball!', t);
+    }
+    ball.position.x += ballVel.x*dt; ball.position.z += ballVel.y*dt;
+    ballVel.multiplyScalar(Math.max(0, 1 - 2.2*dt));
+    if (ball.position.x < RX-11.4 || ball.position.x > RX+11.4) { ballVel.x *= -1; ball.position.x = THREE.MathUtils.clamp(ball.position.x, RX-11.4, RX+11.4); blip(200,.05,'sine',.08); }
+    if (ball.position.z < RZ-8.4 || ball.position.z > RZ+8.7) { ballVel.y *= -1; ball.position.z = THREE.MathUtils.clamp(ball.position.z, RZ-8.4, RZ+8.7); blip(200,.05,'sine',.08); }
+    ball.rotation.z -= ballVel.x*dt*2.5; ball.rotation.x += ballVel.y*dt*2.5;
+    const rg = Math.max(0, 1 - (t - dinoRoomGig)*1.3);
+    dinoRoom.scale.setScalar(1 + .15*Math.sin((t - dinoRoomGig)*15)*rg);
+    dinoRoom.rotation.y = dinoBaseRy + Math.sin(t*1.2)*.12;
+    dinoRoom.userData.tailG.rotation.y = Math.sin(t*2.6)*.22;      // хвост виляет
+    const chew = t - dinoChew < .9 ? Math.sin((t - dinoChew)*22)*.18*(1 - (t - dinoChew)/.9) : 0;
+    dinoRoom.userData.headG.rotation.x = Math.sin(t*1.7)*.07 + chew;
+
+    /* еда летит Дино в рот */
+    foods.forEach(f => {
+      if (f.state === 'fly') {
+        const k = Math.min(1, (t - f.t0) / .7);
+        const ry = dinoRoom.rotation.y;
+        const mouth = new THREE.Vector3(
+          dinoRoom.position.x + Math.sin(ry)*.95,
+          dinoRoom.position.y + 1.72,
+          dinoRoom.position.z + Math.cos(ry)*.95);
+        f.mesh.position.lerpVectors(f.home, mouth, k);
+        f.mesh.rotation.y += dt*6;
+        if (k >= 1) {
+          f.state = 'gone'; f.t0 = t;
+          f.mesh.visible = false;
+          dinoChew = t;
+          blip(220, .09, 'square', .15, 140); blip(170, .1, 'square', .12, 110);
+        }
+      } else if (f.state === 'gone' && t - f.t0 > 2.5) {
+        f.state = 'idle'; f.mesh.visible = true;
+        f.mesh.position.copy(f.home);
+        blip(1200, .06, 'triangle', .06);
+      }
+    });
+
+    /* колыбельная, пока Луи спит */
+    if (lying && t > lullNext) {
+      blip(LULLABY[lullIdx++ % LULLABY.length], .55, 'sine', .05);
+      lullNext = t + .85;
+    }
+
+    /* игрушки в игровой */
+    const bAge = t - blocksT;
+    if (bAge < 1.1) {                              // кубики разлетаются
+      cubes.forEach(c => {
+        c.userData.vel.y -= 9 * dt;
+        c.position.addScaledVector(c.userData.vel, dt);
+        if (c.position.y < ROOM_Y + .28) { c.position.y = ROOM_Y + .28; c.userData.vel.y *= -.35; }
+        c.rotation.x += c.userData.vel.z * dt * 2;
+        c.rotation.z += c.userData.vel.x * dt * 2;
+      });
+    } else if (bAge < 3.2) {                       // и аккуратно собираются обратно
+      const k = Math.min(1, dt * 4);
+      cubes.forEach(c => {
+        c.position.lerp(c.userData.home, k);
+        c.rotation.x *= (1 - k); c.rotation.z *= (1 - k); c.rotation.y *= (1 - k);
+      });
+    }
+    const cAge = t - carT;
+    if (cAge < 6) {                                // машинка нарезает круги
+      const a = cAge * 1.8;
+      carG.position.set(CAR_HOME.x + Math.sin(a) * 2.0, ROOM_Y, CAR_HOME.z + Math.cos(a) * 2.0);
+      carG.rotation.y = a + Math.PI / 2;
+      if (Math.random() < dt * 2.2) blip(85 + Math.random() * 30, .08, 'sawtooth', .05, 130);
+    } else if (cAge < 8) {
+      carG.position.lerp(CAR_HOME, Math.min(1, dt * 4));
+    }
+    const tdAge = t - teddyT;
+    if (tdAge < 1.4) {                             // мишка машет и подпрыгивает
+      const dec = 1 - tdAge / 1.4;
+      tdArmR.rotation.z = -.8 - Math.sin(tdAge * 12) * .7 * dec;
+      teddyG.position.y = ROOM_Y + Math.abs(Math.sin(tdAge * 9)) * .2 * dec;
+    }
+    const pAge = t - pyrT;
+    if (pAge < 1.6) {                              // колечки пирамидки прыгают по очереди
+      const dec = 1 - pAge / 1.6;
+      pyrRings.forEach((ring, i) => {
+        ring.position.y = ring.userData.baseY + Math.max(0, Math.sin(pAge * 7 - i * .9)) * .3 * dec;
+      });
+    }
+  }
+  /* ночь приглушает свет, утро возвращает */
+  renderer.toneMappingExposure += ((lying ? .45 : 1.05) - renderer.toneMappingExposure) * Math.min(1, dt*1.5);
+
+  /* камера: вступление показывает домик, потом следует за Луи */
+  if (!indoor) {                                       // в комнате камера не крутится за героем
+    let dYaw = heading - camYaw;
+    while (dYaw > Math.PI) dYaw -= 2*Math.PI;
+    while (dYaw < -Math.PI) dYaw += 2*Math.PI;
+    camYaw += dYaw * Math.min(1, dt*1.8);
+  }
+  const cx = hero.position.x - Math.sin(camYaw)*7.5;
+  const cz = hero.position.z - Math.cos(camYaw)*7.5;
+  const cy = Math.max(hills(cx, cz) + 2.4, hero.position.y + 2.6);
+  if (indoor) {                                        // кукольный дом: камера смотрит в разрез
+    const bx = inKitchen ? RX2 : inPlay ? RX3 : RX;
+    const bcz = (inKitchen || inPlay) ? 0 : RZ;
+    const camZ = (inKitchen || inPlay) ? 13.8 : RZ + 16.2;
+    const camY = (inKitchen || inPlay) ? 6.9 : 7.4;
+    camera.position.lerp(new THREE.Vector3(bx + (hero.position.x - bx)*.35, ROOM_Y + camY, camZ), Math.min(1, dt*3));
+    camera.lookAt(hero.position.x*.6 + bx*.4, ROOM_Y + 1.2, hero.position.z*.6 + (bcz - 1)*.4);
+  } else if (!introDone) {
+    introP += dt * (introFast ? 3.2 : 1);              // ранний жест ускоряет пролёт, а не рвёт его
+    if (introP >= INTRO_LEN) { introDone = true; hintDeadline = t + 9; }
+    const b = THREE.MathUtils.smoothstep(introP / INTRO_LEN, 0, 1);
+    const p0 = new THREE.Vector3(HX + 5, hills(HX, HZ) + 4.5, HZ + 12);
+    const p1 = new THREE.Vector3(cx, cy, cz);
+    camera.position.lerpVectors(p0, p1, b);
+    const look0 = new THREE.Vector3(HX, hills(HX, HZ) + 2, HZ + 1.6);
+    const look1 = new THREE.Vector3(hero.position.x, hero.position.y + 1.05, hero.position.z);
+    camera.lookAt(look0.lerp(look1, b));
+  } else {
+    camera.position.lerp(new THREE.Vector3(cx, cy, cz), Math.min(1, dt*4));
+    camera.lookAt(hero.position.x, hero.position.y + 1.05, hero.position.z);
+  }
+  if (!hintGone && t > hintDeadline) { hintGone = true; hintEl.style.opacity = '0'; }
+
+  renderer.render(scene, camera);
+}
+frame();
+</script>
