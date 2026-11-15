@@ -1145,7 +1145,8 @@ new GLTFLoader().load('assets/Rogue.wasm', g => {   // .wasm — потому ч
   });
   mixer.addEventListener('finished', () => {
     const nx = pendingNext; pendingNext = null; curAction = null;
-    playAnim(nx || 'Idle', .2);
+    if (!nx) mixer.stopAllAction();   // жёсткий сброс позы: лёжа/ура не оставляют «наклона»
+    playAnim(nx || 'Idle', .15);
   });
   hero.clear();                      // примитивный Луи уступает место скелетному
   hero.add(model);
@@ -1460,7 +1461,8 @@ function frame() {
       sp = autoWalk ? 2.8 : 4.6;
     }
   }
-  if (sitting || lying) moving = false;            // сидим или спим — не шагаем
+  const busyAnim = modelLoaded && curAction && curAction.loop === THREE.LoopOnce && curAction.isRunning();
+  if (sitting || lying || busyAnim) moving = false; // сидим, спим или доигрываем анимацию — не шагаем
   curSp += ((moving ? sp : 0) - curSp) * Math.min(1, dt * 7);   // плавный разгон и торможение
   if (curSp > .12) {
     hero.position.x += Math.sin(heading)*curSp*dt;
@@ -1504,8 +1506,7 @@ function frame() {
   /* бег: ноги, подпрыгивание, плащ */
   if (modelLoaded) {
     mixer.update(dt);
-    const busy = curAction && curAction.loop === THREE.LoopOnce && curAction.isRunning();
-    if (!busy && !sitting && !lying) {
+    if (!busyAnim && !sitting && !lying) {
       if (curSp > .4) playAnim(curSp > 4 ? 'Running_A' : 'Walking_B');
       else playAnim('Idle');
     }
