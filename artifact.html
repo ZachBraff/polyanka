@@ -53,6 +53,32 @@
     box-shadow:0 4px 0 #D9A800, 0 6px 14px rgba(0,0,0,.25); display:none; cursor:pointer;
   }
   #hornBtn:active { transform:scale(1.12); }
+  /* книжка-раскладушка */
+  #bookCard {
+    position:fixed; inset:0; z-index:28; display:none;
+    align-items:center; justify-content:center;
+    background:rgba(40, 28, 20, .55);
+    font-family: ui-rounded, "SF Pro Rounded", system-ui, sans-serif;
+  }
+  #bookCard .book {
+    position:relative; background:#FFF8EA; border-radius:18px; padding:12px 12px 4px;
+    box-shadow:0 18px 50px rgba(0,0,0,.35); width:min(88vw, 500px);
+  }
+  #bookCanvas { width:100%; border-radius:12px; display:block; }
+  #bookWord { text-align:center; font-weight:800; color:#4A3A2A; font-size:clamp(18px, 4.5vw, 25px); padding:8px 0 0; }
+  #bookWord small { display:block; color:#8A765C; font-size:.72em; font-weight:700; }
+  #bookDots { text-align:center; padding:4px 0 8px; color:#D8C4A4; font-size:12px; letter-spacing:5px; }
+  #bookClose {
+    position:absolute; top:-14px; right:-14px; width:46px; height:46px; border-radius:50%; border:0;
+    background:#FFD93D; color:#4A3300; font-size:20px; font-weight:800;
+    box-shadow:0 3px 10px rgba(0,0,0,.25); z-index:2; cursor:pointer;
+  }
+  #bookPrev, #bookNext {
+    position:absolute; top:45%; transform:translateY(-50%); width:48px; height:48px; border-radius:50%; border:0;
+    background:rgba(255,255,255,.95); color:#6A5235; font-size:26px; font-weight:800;
+    box-shadow:0 3px 10px rgba(0,0,0,.22); z-index:2; cursor:pointer;
+  }
+  #bookPrev { left:-12px; } #bookNext { right:-12px; }
   #joyBase, #joyKnob {
     position:fixed; border-radius:50%; pointer-events:none; display:none; z-index:5;
     transform:translate(-50%,-50%);
@@ -73,6 +99,13 @@
 <div id="word"></div>
 <button id="sndBtn">🔇</button>
 <button id="hornBtn">📯</button>
+<div id="bookCard"><div class="book">
+  <button id="bookClose">✕</button>
+  <button id="bookPrev">‹</button><button id="bookNext">›</button>
+  <canvas id="bookCanvas" width="500" height="360"></canvas>
+  <div id="bookWord"></div>
+  <div id="bookDots"></div>
+</div></div>
 <div id="titleCard">
   <div class="dino">🦖</div>
   <h1>Полянка</h1>
@@ -606,9 +639,17 @@ gPostL.position.set(-2.1, 1.35, 2.5);
 const gPostR = gPostL.clone(); gPostR.position.x = 2.1;
 const gLintel = new THREE.Mesh(new THREE.BoxGeometry(4.6, .35, .3), toon('#8A5F3C'));
 gLintel.position.set(0, 2.6, 2.5);
-garageG.add(gFloor, gBack, gDark, gSideL, gSideR, gRoof, gPostL, gPostR, gLintel);
+/* дверь из гаража прямо в дом (правая стена смотрит на домик) */
+const gDoorFrame = new THREE.Mesh(new THREE.BoxGeometry(.14, 2.0, 1.3), toon('#8A5F3C'));
+gDoorFrame.position.set(2.06, 1.0, .4);
+const gInDoor = new THREE.Mesh(new THREE.BoxGeometry(.1, 1.8, 1.05), toon('#5B7FD4'));
+gInDoor.position.set(1.97, .95, .4);
+const gKnob = new THREE.Mesh(new THREE.SphereGeometry(.07, 10, 10), toon('#F2D24B'));
+gKnob.position.set(1.9, .95, .75);
+garageG.add(gFloor, gBack, gDark, gSideL, gSideR, gRoof, gPostL, gPostR, gLintel, gDoorFrame, gInDoor, gKnob);
 garageG.position.set(GX, hills(GX, GZ), GZ);
 outdoorG.add(garageG);
+const gFloorY = (x, z) => (Math.abs(x - GX) < 2.2 && z - GZ > -2.6 && z - GZ < 2.6) ? .14 : 0;   // пол гаража приподнят
 
 let driving = false, carPending = false, motorNext = 0;
 
@@ -1027,7 +1068,7 @@ bookG.add(cover, page1, page2);
 bookG.position.set(RX3 + 6, ROOM_Y, 3.3);
 bookG.rotation.y = .4;
 playG.add(bookG);
-wordObjects.push({ o: bookG, ru: 'Книжка!', de: 'Das Buch!' });
+wordObjects.push({ o: bookG, ru: 'Книжка!', de: 'Das Buch!', kind: 'bookread' });
 scene.add(playG);
 let blocksT = -9, carT = -9, teddyT = -9, pyrT = -9;
 
@@ -1093,7 +1134,7 @@ function enterRoom() {
   hero.position.set(RX, ROOM_Y, RZ + 7.4);
   heading = Math.PI;
   walkTarget = null; autoWalk = false; tapRing.visible = false;
-  sitting = false; sitPending = false; lying = false; bedPending = false; inKitchen = false;
+  sitting = false; sitPending = false; lying = false; bedPending = false; inKitchen = false; carPending = false;
   blip(500, .18, 'sine', .14, 260);
   sayWorld('Домик!', 'Das Haus!', clock.elapsedTime);
 }
@@ -1102,8 +1143,8 @@ function exitRoom() {
   setIndoorView(false);
   dinoRoom.position.set(RX - 6.8, ROOM_Y, RZ - 5.2);
   dinoBaseRy = .55;
-  hero.position.set(outdoorReturn.x, hills(outdoorReturn.x, outdoorReturn.z), outdoorReturn.z);
-  heading = 0;
+  hero.position.set(outdoorReturn.x, hills(outdoorReturn.x, outdoorReturn.z) + gFloorY(outdoorReturn.x, outdoorReturn.z), outdoorReturn.z);
+  heading = outdoorReturn.h ?? 0;
   walkTarget = null; tapRing.visible = false;
   blip(260, .18, 'sine', .12, 500);
 }
@@ -1424,6 +1465,144 @@ hornBtn.addEventListener('pointerdown', e => {
   setTimeout(() => { blip(520, .15, 'square', .15, 430); }, 260);   // би-би-биии!
   sayWorld('Би-би!', 'Tut-tut!', clock.elapsedTime);
 });
+/* ============ книжка про крокодильчика (свои картинки по мотивам любимой книжки) ============ */
+const bookCard = document.getElementById('bookCard');
+const bookCanvas = document.getElementById('bookCanvas');
+const bookWordEl = document.getElementById('bookWord');
+const bookDotsEl = document.getElementById('bookDots');
+const bc2 = bookCanvas.getContext('2d');
+let bookOpen = false, bookPage = 0;
+function speakPair(ru, de) {                       // как sayWorld, но без кулдауна — у книжки своя плашка
+  if (!spoke || !('speechSynthesis' in window)) return;
+  try {
+    speechSynthesis.cancel();
+    const u1 = new SpeechSynthesisUtterance(ru); u1.lang = 'ru-RU'; u1.pitch = 1.25; u1.rate = .95;
+    const u2 = new SpeechSynthesisUtterance(de); u2.lang = 'de-DE'; u2.pitch = 1.25; u2.rate = .95;
+    speechSynthesis.speak(u1); speechSynthesis.speak(u2);
+  } catch (e) {}
+}
+function bEll(x, y, rx, ry, col) { bc2.fillStyle = col; bc2.beginPath(); bc2.ellipse(x, y, rx, ry, 0, 0, 7); bc2.fill(); }
+function bRR(x, y, w, h, r, col) { bc2.fillStyle = col; bc2.beginPath(); bc2.roundRect(x, y, w, h, r); bc2.fill(); }
+function bSky(top = '#D8EEF7', bot = '#F4EBCF') {
+  const g = bc2.createLinearGradient(0, 0, 0, 360); g.addColorStop(0, top); g.addColorStop(1, bot);
+  bc2.fillStyle = g; bc2.fillRect(0, 0, 500, 360);
+}
+function bGrass() { bEll(250, 420, 330, 110, '#8ED161'); }
+function bFlower(x, y, s, col) {
+  bc2.strokeStyle = '#5E9C44'; bc2.lineWidth = 3 * s;
+  bc2.beginPath(); bc2.moveTo(x, y + 6 * s); bc2.quadraticCurveTo(x + 3 * s, y + 18 * s, x, y + 28 * s); bc2.stroke();
+  for (let i = 0; i < 5; i++) { const a = i / 5 * Math.PI * 2; bEll(x + Math.cos(a) * 7 * s, y + Math.sin(a) * 7 * s, 5 * s, 5 * s, col); }
+  bEll(x, y, 4.5 * s, 4.5 * s, '#FFD93D');
+}
+function bCroc(x, y, s, o = {}) {                  // дружелюбный крокодильчик, смотрит вправо
+  bc2.save(); bc2.translate(x, y); bc2.scale(o.flip ? -s : s, s);
+  const GR = '#7FCB6E', GL = '#A8DC8E', DK = '#4E8A42';
+  bc2.fillStyle = GR; bc2.beginPath();              // хвост
+  bc2.moveTo(-48, 6); bc2.quadraticCurveTo(-95, 2, -108, -18); bc2.quadraticCurveTo(-88, 14, -50, 26); bc2.closePath(); bc2.fill();
+  bEll(-22, 52, 13, 16, GR);                        // задняя лапка
+  bEll(0, 10, 52, 40, GR);                          // тело
+  bEll(4, 26, 38, 24, GL);                          // брюшко
+  if (o.wave) { bc2.save(); bc2.translate(34, -6); bc2.rotate(-2.2); bEll(16, 0, 9, 17, GR); bc2.restore(); }
+  else bEll(26, 52, 13, 16, GR);                    // передняя лапка
+  bEll(44, -36, 26, 23, GR);                        // голова
+  bRR(52, -38, 46, 24, 11, GR);                     // мордочка
+  bEll(88, -26, 4, 3, DK);                          // ноздря
+  bEll(48, -52, 10, 11, '#FFFFFF'); bEll(50, -51, 4.5, 5, '#2E2A26');   // глаз
+  bc2.strokeStyle = DK; bc2.lineWidth = 3; bc2.beginPath(); bc2.arc(66, -22, 18, .25, 1.35); bc2.stroke();   // улыбка
+  [-30, -8, 14].forEach(gx => bEll(gx, -32, 8, 9, DK));   // гребешки
+  bc2.restore();
+}
+const BOOK_PAGES = [
+  { ru: 'Тук-тук!', de: 'Klopf-klopf!', draw() {
+      bSky(); bGrass();
+      bc2.fillStyle = '#C96B47'; bc2.beginPath(); bc2.moveTo(240, 132); bc2.lineTo(350, 52); bc2.lineTo(462, 132); bc2.closePath(); bc2.fill();
+      bRR(260, 128, 182, 172, 10, '#F3E6CC');       // домик
+      bRR(330, 206, 52, 94, 8, '#5B7FD4');          // синяя дверь
+      bEll(372, 256, 5, 5, '#FFD93D');              // ручка
+      bRR(278, 158, 38, 38, 6, '#FFFFFF');          // окно
+      bc2.strokeStyle = '#8A5F3C'; bc2.lineWidth = 3; bc2.strokeRect(278, 158, 38, 38);
+      bc2.beginPath(); bc2.moveTo(297, 158); bc2.lineTo(297, 196); bc2.moveTo(278, 177); bc2.lineTo(316, 177); bc2.stroke();
+      bCroc(150, 250, .95, { wave: true });         // крокодильчик стучит
+      bc2.fillStyle = '#FFD93D'; bc2.font = '800 30px ui-rounded, system-ui';
+      bc2.fillText('✦', 296, 160); bc2.fillText('✦', 318, 128);
+    } },
+  { ru: 'Крокодильчик!', de: 'Das Krokodil!', draw() {
+      bSky(); bGrass();
+      bCroc(250, 220, 1.25, { wave: true });
+      bFlower(80, 300, 1.3, '#FFB7D0'); bFlower(420, 310, 1.1, '#B48CD9'); bFlower(130, 330, 1, '#FFFFFF');
+      bEll(390, 110, 8, 11, '#FFE066'); bEll(406, 110, 8, 11, '#FFE066'); bEll(398, 113, 3, 8, '#8A5F3C');   // бабочка
+    } },
+  { ru: 'Моем лапки!', de: 'Hände waschen!', draw() {
+      bSky('#CFE8F2', '#EFE6CF'); bGrass();
+      bCroc(160, 220, 1);
+      bEll(355, 295, 95, 32, '#8A5F3C'); bEll(355, 286, 84, 24, '#9FD8EF');   // тазик с водой
+      [[315, 274], [350, 266], [387, 274], [335, 254]].forEach(([px, py]) => bEll(px, py, 14, 12, '#FFFFFF'));   // пена
+      [[300, 180], [340, 150], [390, 190], [425, 140]].forEach(([px, py], i) => {
+        bc2.strokeStyle = 'rgba(255,255,255,.9)'; bc2.lineWidth = 2.5;
+        bc2.beginPath(); bc2.arc(px, py, 9 + i * 2, 0, 7); bc2.stroke();      // пузыри
+      });
+    } },
+  { ru: 'Кушай!', de: 'Guten Appetit!', draw() {
+      bSky('#F2E3C2', '#FBF3DD');
+      bCroc(130, 190, .9);
+      bRR(210, 254, 240, 16, 8, '#8A5F3C'); bRR(230, 270, 14, 70, 4, '#8A5F3C'); bRR(416, 270, 14, 70, 4, '#8A5F3C');   // стол
+      bEll(330, 252, 64, 16, '#FFFFFF'); bEll(330, 250, 52, 12, '#F6EFE2');   // тарелка
+      bEll(312, 238, 16, 16, '#E05548');                                       // яблоко
+      bc2.strokeStyle = '#5E9C44'; bc2.lineWidth = 3; bc2.beginPath(); bc2.moveTo(312, 224); bc2.quadraticCurveTo(318, 216, 324, 220); bc2.stroke();
+      bc2.strokeStyle = '#F2D24B'; bc2.lineWidth = 9; bc2.beginPath(); bc2.arc(360, 228, 18, .6, 2.6); bc2.stroke();     // банан
+      bRR(442, 220, 34, 30, 6, '#5B7FD4');                                     // чашка
+    } },
+  { ru: 'Цветочек!', de: 'Die Blume!', draw() {
+      bSky(); bGrass();
+      bCroc(330, 220, 1, { flip: true });
+      bRR(230, 180, 48, 34, 8, '#9FB6C9');          // леечка
+      bc2.strokeStyle = '#9FB6C9'; bc2.lineWidth = 7; bc2.beginPath(); bc2.moveTo(232, 192); bc2.lineTo(204, 172); bc2.stroke();
+      [[196, 196], [186, 216], [202, 232]].forEach(([px, py]) => bEll(px, py, 4, 6, '#9FD8EF'));   // капли
+      bFlower(150, 300, 1.6, '#FFB7D0'); bFlower(100, 320, 1.2, '#B48CD9'); bFlower(195, 325, 1.1, '#FFFFFF');
+    } },
+  { ru: 'Камин!', de: 'Der Kamin!', draw() {
+      const g = bc2.createLinearGradient(0, 0, 0, 360); g.addColorStop(0, '#5A4332'); g.addColorStop(1, '#3C2E22');
+      bc2.fillStyle = g; bc2.fillRect(0, 0, 500, 360);
+      bRR(40, 300, 420, 40, 10, '#6E5138');          // пол
+      bRR(270, 110, 180, 200, 10, '#B06A4A');        // камин
+      bRR(262, 96, 196, 18, 8, '#8A5F3C');           // полка
+      bRR(300, 160, 120, 150, 10, '#3A2E26');        // топка
+      bc2.fillStyle = '#FF9C3D'; bc2.beginPath(); bc2.moveTo(316, 306); bc2.quadraticCurveTo(340, 206, 364, 306); bc2.closePath(); bc2.fill();
+      bc2.fillStyle = '#FFD93D'; bc2.beginPath(); bc2.moveTo(340, 306); bc2.quadraticCurveTo(362, 232, 386, 306); bc2.closePath(); bc2.fill();
+      bEll(150, 326, 90, 16, '#C96B47');             // коврик
+      bCroc(140, 240, 1);
+    } },
+];
+function renderBook() {
+  const p = BOOK_PAGES[bookPage];
+  bc2.clearRect(0, 0, 500, 360);
+  p.draw();
+  bookWordEl.innerHTML = p.ru.replace('!', '') + '<small>' + p.de + '</small>';
+  bookDotsEl.textContent = BOOK_PAGES.map((_, i) => i === bookPage ? '●' : '○').join(' ');
+  speakPair(p.ru, p.de);
+}
+function openBook() {
+  bookOpen = true; bookPage = 0;
+  bookCard.style.display = 'flex';
+  blip(700, .08, 'triangle', .12, 900);
+  renderBook();
+}
+function closeBook() { bookOpen = false; bookCard.style.display = 'none'; blip(420, .08, 'triangle', .1, 300); }
+function flipBook(d) {
+  bookPage = (bookPage + d + BOOK_PAGES.length) % BOOK_PAGES.length;
+  blip(880, .05, 'triangle', .09);
+  renderBook();
+}
+document.getElementById('bookClose').addEventListener('click', closeBook);
+document.getElementById('bookPrev').addEventListener('click', e => { e.stopPropagation(); flipBook(-1); });
+document.getElementById('bookNext').addEventListener('click', e => { e.stopPropagation(); flipBook(1); });
+bookCanvas.addEventListener('click', e => {
+  const r = bookCanvas.getBoundingClientRect();
+  flipBook(e.clientX - r.left > r.width / 2 ? 1 : -1);
+});
+bookCard.addEventListener('click', e => { if (e.target === bookCard) closeBook(); });
+window.__book = { open: openBook, flip: flipBook, close: closeBook, state: () => ({ bookOpen, bookPage }) };
+
 const hintEl = document.getElementById('hint');
 hintEl.textContent = matchMedia('(pointer: coarse)').matches
   ? 'Тапни на полянку — Луи пойдёт сам'
@@ -1515,6 +1694,8 @@ function tapToGo(cx, cy) {
           pyrT = clock.elapsedTime;
           [660, 784, 880, 1047].forEach((f, i) => setTimeout(() => blip(f, .14, 'triangle', .1), i * 90));
         }
+        if (w.kind === 'bookread') setTimeout(openBook, 500);   // слово «Книжка» успевает мелькнуть
+
         blip(880, .07, 'triangle', .1);
         sayWorld(w.ru, w.de, tn);
         if (w.kind) return;
@@ -1526,6 +1707,16 @@ function tapToGo(cx, cy) {
     const hitsG = ray.intersectObject(garageG, true);
     const hitsCar = ray.intersectObjects([driveCar, ...parkedCars], true);
     if (hitsG.length && (!hitsCar.length || hitsG[0].distance < hitsCar[0].distance)) {
+      if (!driving && [gInDoor, gKnob, gDoorFrame].includes(hitsG[0].object)) {   // дверь в дом
+        blip(880, .07, 'triangle', .1);
+        sayWorld('Дверь!', 'Die Tür!', clock.elapsedTime);
+        // прямой путь — только из гаража или с юга через ворота; сбоку/сзади сперва подойдём к воротам
+        const clearPath = gFloorY(hero.position.x, hero.position.z) > 0 ||
+          (hero.position.z > GZ + 2.5 && Math.abs(hero.position.x - GX) < 3);
+        walkTarget = clearPath ? { x: GX + 1.7, z: GZ + .4 } : { x: GX, z: GZ + 3.4 };
+        autoWalk = false; tapRing.visible = false;
+        return;
+      }
       blip(880, .07, 'triangle', .1);
       sayWorld('Гараж!', 'Die Garage!', clock.elapsedTime);
       // за рулём — заезжаем внутрь (там сработает парковка), пешком — подходим к воротам
@@ -1545,6 +1736,8 @@ function tapToGo(cx, cy) {
           driving = false;
           hero.visible = true;
           hero.position.set(driveCar.position.x + 1.7, 0, driveCar.position.z);
+          if (gFloorY(hero.position.x, hero.position.z))       // в гараже не высаживаем в дверь
+            hero.position.x = Math.min(hero.position.x, GX + 1.2);
           walkTarget = null; tapRing.visible = false;
           blip(300, .2, 'sawtooth', .05, 60);
           sayWorld('Приехали!', 'Angekommen!', tn);
@@ -1586,10 +1779,10 @@ function tapToGo(cx, cy) {
   tapRing.visible = true;
 }
 
-addEventListener('keydown', e => { if (!started) return; keys[e.code] = true; userActed = true; introFast = true; firstGesture(); });
+addEventListener('keydown', e => { if (!started || bookOpen) return; keys[e.code] = true; userActed = true; introFast = true; firstGesture(); });
 addEventListener('keyup', e => keys[e.code] = false);
 addEventListener('pointerdown', e => {
-  if (!started) return;
+  if (!started || bookOpen) return;
   if (e.target === sndBtn || e.target === hornBtn) return;
   if (joy) return;                                     // второй палец/ладонь игнорируем
   joy = { id: e.pointerId, sx: e.clientX, sy: e.clientY, dx: 0, dy: 0, drag: false };
@@ -1698,7 +1891,8 @@ function frame() {
 
   /* заскучал на 6 секунд — Луи сам идёт по тропинке к домику */
   const dHouseNow = Math.hypot(hero.position.x - HX, hero.position.z - (HZ + 1.8));
-  if (!indoor && !driving && !manual && !walkTarget && introDone && !doorOpen && dHouseNow > 4 && t - lastInput > 6) {
+  if (!indoor && !driving && !manual && !walkTarget && introDone && !doorOpen && dHouseNow > 4 && t - lastInput > 6
+      && !gFloorY(hero.position.x, hero.position.z)) {   // в гараже автопрогулка не утаскивает в дом
     autoWalk = true;
     const wz = hero.position.z - 12;
     walkTarget = wz <= HZ + 4 ? { x: HX, z: HZ + 2.2 }      // финальный шаг — к самой двери
@@ -1795,15 +1989,21 @@ function frame() {
       /* гараж: стены настоящие, заехал на машине — припарковался */
       const gdx = hero.position.x - GX, gdz = hero.position.z - GZ;
       if (Math.abs(gdx) < 2.35 && gdz > -2.7 && gdz < 2.5) {
-        if (Math.abs(gdx) > 1.6) {
-          hero.position.x = GX + Math.sign(gdx) * 2.35;        // бока непроходимы
+        if (!driving && gdx > 1.45 && gdx < 2.0 && Math.abs(gdz - .4) < .75) {   // дверь: из гаража в дом
+          wordCool = -9;                                                         // пусть «Домик!» прозвучит
+          enterRoom();
+          outdoorReturn = { x: GX, z: GZ + 3.4, h: Math.PI };                    // выход вернёт к воротам гаража
+        } else if (Math.abs(gdx) > 1.6) {
+          // бока непроходимы: выталкиваем в БЛИЖНЮЮ сторону (изнутри — внутрь, снаружи — наружу)
+          hero.position.x = GX + Math.sign(gdx) * (Math.abs(gdx) < 1.975 ? 1.6 : 2.35);
+          if (gdz < -1.7) hero.position.z = GZ - 2.75;         // задний угол не затягивает внутрь
         } else {
           if (gdz < -1.7) hero.position.z = GZ - 1.7;          // задняя стена
           if (driving && gdz < .5) {                            // заехал — паркуемся!
             driving = false;
             hero.visible = true;
             hero.position.set(GX, 0, GZ + 3.6);
-            driveCar.position.set(GX, hills(GX, GZ - .9) + .04, GZ - .9);   // аккуратно внутрь
+            driveCar.position.set(GX, hills(GX, GZ - .9) + .18, GZ - .9);   // аккуратно внутрь, на пол
             driveCar.rotation.y = 0;                                        // носом к выходу
             walkTarget = null; tapRing.visible = false;
             blip(300, .25, 'sawtooth', .05, 50);
@@ -1816,7 +2016,7 @@ function frame() {
   } else {
     runPhase += dt*2;
   }
-  hero.position.y = indoor ? ROOM_Y + (sitting ? (sitSpot ? sitSpot.oy : .18) : lying ? .55 : 0) : hills(hero.position.x, hero.position.z);
+  hero.position.y = indoor ? ROOM_Y + (sitting ? (sitSpot ? sitSpot.oy : .18) : lying ? .55 : 0) : hills(hero.position.x, hero.position.z) + gFloorY(hero.position.x, hero.position.z);
   hero.rotation.y = heading;
 
   /* бег: ноги, подпрыгивание, плащ */
@@ -1920,7 +2120,7 @@ function frame() {
   riders.visible = driving;
   hornBtn.style.display = driving ? 'block' : 'none';
   if (driving) {
-    driveCar.position.set(hero.position.x, hills(hero.position.x, hero.position.z) + .04, hero.position.z);
+    driveCar.position.set(hero.position.x, hills(hero.position.x, hero.position.z) + .04 + gFloorY(hero.position.x, hero.position.z), hero.position.z);
     driveCar.rotation.y = heading;
     riderLui.rotation.z = Math.sin(t*7) * .06;                     // головы качаются в такт
     riderDino.rotation.z = Math.sin(t*7 + 1.3) * .07;
