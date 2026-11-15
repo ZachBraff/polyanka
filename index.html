@@ -562,19 +562,41 @@ outdoorG.add(houseG);
 function makeCar(color) {
   const g = new THREE.Group();
   const body = new THREE.Mesh(new THREE.BoxGeometry(1.5, .55, 2.7), toon(color)); body.position.y = .62;
-  const cab = new THREE.Mesh(new THREE.BoxGeometry(1.25, .55, 1.3), toon('#BFE3F2')); cab.position.set(0, 1.12, -.1);
-  g.add(body, cab);
+  const hood = new THREE.Mesh(new THREE.BoxGeometry(1.3, .14, .8), toon(color)); hood.position.set(0, .93, .85);
+  const cab = new THREE.Mesh(new THREE.BoxGeometry(1.25, .45, 1.3), toon(color)); cab.position.set(0, 1.02, -.1);   // открытый верх — пассажиров видно
+  g.add(body, hood, cab);
+  const wshield = new THREE.Mesh(new THREE.BoxGeometry(1.08, .5, .07), toon('#BFE3F2'));   // лобовое стекло
+  wshield.position.set(0, 1.42, .5); wshield.rotation.x = -.2;
+  g.add(wshield);
   [[-.72, .95], [.72, .95], [-.72, -.95], [.72, -.95]].forEach(([wx, wz]) => {
     const w = new THREE.Mesh(new THREE.CylinderGeometry(.3, .3, .22, 12), toon('#3A3A3A'));
     w.rotation.z = Math.PI/2;
     w.position.set(wx, .3, wz);
-    g.add(w);
+    const hub = new THREE.Mesh(new THREE.CylinderGeometry(.14, .14, .24, 10), toon('#E8E4DA'));   // колпак
+    hub.rotation.z = Math.PI/2;
+    hub.position.set(wx, .3, wz);
+    g.add(w, hub);
   });
   [-.45, .45].forEach(fx => {
-    const lamp = new THREE.Mesh(new THREE.SphereGeometry(.09, 8, 6), toon('#FFE9A8'));
+    const lamp = new THREE.Mesh(new THREE.SphereGeometry(.1, 8, 6), toon('#FFE9A8'));
     lamp.position.set(fx, .68, 1.38);
-    g.add(lamp);
+    const tail = new THREE.Mesh(new THREE.SphereGeometry(.07, 8, 6), toon('#E0443A'));            // задние фонари
+    tail.position.set(fx, .68, -1.37);
+    g.add(lamp, tail);
   });
+  const bmpF = new THREE.Mesh(new THREE.BoxGeometry(1.56, .16, .18), toon('#C9CFD4'));            // бамперы
+  bmpF.position.set(0, .4, 1.4);
+  const bmpB = bmpF.clone(); bmpB.position.z = -1.4;
+  const grille = new THREE.Mesh(new THREE.BoxGeometry(.7, .14, .06), toon('#5A5A5A'));            // решётка
+  grille.position.set(0, .62, 1.39);
+  const pipe = new THREE.Mesh(new THREE.CylinderGeometry(.06, .06, .22, 8), toon('#8A8F94'));     // выхлопная труба
+  pipe.rotation.x = Math.PI/2; pipe.position.set(-.5, .28, -1.42);
+  [-.77, .77].forEach(sx => {                                                                    // ручки дверей
+    const hdl = new THREE.Mesh(new THREE.BoxGeometry(.05, .06, .22), toon('#F4F1E8'));
+    hdl.position.set(sx, .82, .18);
+    g.add(hdl);
+  });
+  g.add(bmpF, bmpB, grille, pipe);
   return g;
 }
 const driveCar = makeCar('#E05548');          // машина Луи у домика Дино
@@ -662,6 +684,21 @@ outdoorG.add(garageG);
 const gFloorY = (x, z) => (Math.abs(x - GX) < 2.2 && z - GZ > -2.6 && z - GZ < 2.6) ? .14 : 0;   // пол гаража приподнят
 
 let driving = false, carPending = false, motorNext = 0;
+
+/* Дино гуляет во дворе, пока дверь закрыта, и болтает простые фразочки */
+const dinoWalker = buildDino(.92);
+dinoWalker.position.set(HX + 4.5, hills(HX + 4.5, HZ + 6.5), HZ + 6.5);
+outdoorG.add(dinoWalker);
+let dwTarget = null, dwNextMove = 0, dwSay = 6, dwGig = -9;
+const DINO_PHRASES = [
+  ['Привет, Луи!', 'Hallo, Louis!'],
+  ['Ля-ля-ля!', 'La-la-la!'],
+  ['Какой день!', 'So ein Tag!'],
+  ['Идём гулять!', 'Komm spazieren!'],
+  ['Я динозаврик!', 'Ich bin ein Dino!'],
+  ['Ням-ням!', 'Mampf-mampf!'],
+  ['Догони меня!', 'Fang mich!'],
+];
 
 
 let doorOpen = false, doorAnim = 0, knockT = -9;
@@ -1649,6 +1686,15 @@ function tapToGo(cx, cy) {
       return;
     }
   }
+  if (!indoor && dinoWalker.visible) {              // потрогал гуляющего Дино
+    const dw = ray.intersectObject(dinoWalker, true);
+    if (dw.length) {
+      dwGig = clock.elapsedTime;
+      blip(700, .12, 'sine', .2, 1100); blip(950, .14, 'sine', .18, 1400);
+      sayWorld('Дино!', 'Dino!', clock.elapsedTime);
+      return;
+    }
+  }
   if (indoor) {                                    // в комнате каждая вещь называет себя
     const hitsW = ray.intersectObjects(wordObjects.map(w => w.o), true);
     if (hitsW.length) {
@@ -2083,6 +2129,45 @@ function frame() {
   if (tapRing.visible) {
     const ps = 1 + Math.sin(t*6)*.18;
     tapRing.scale.set(ps, ps, 1);
+  }
+
+  /* Дино гуляет во дворе и болтает */
+  dinoWalker.visible = !indoor && doorAnim < .1;
+  if (dinoWalker.visible && introDone) {
+    const dLui = Math.hypot(hero.position.x - dinoWalker.position.x, hero.position.z - dinoWalker.position.z);
+    if (dLui < 2.6) {                                       // Луи подошёл — Дино поворачивается к нему
+      dwTarget = null; dwNextMove = t + 2;
+      const dirL = Math.atan2(hero.position.x - dinoWalker.position.x, hero.position.z - dinoWalker.position.z);
+      let dl = dirL - dinoWalker.rotation.y;
+      while (dl > Math.PI) dl -= 2*Math.PI; while (dl < -Math.PI) dl += 2*Math.PI;
+      dinoWalker.rotation.y += dl * Math.min(1, dt*6);
+    } else if (!dwTarget && t > dwNextMove) {
+      dwTarget = { x: HX - 3 + Math.random()*10, z: HZ + 3.5 + Math.random()*8 };   // двор перед домом
+    }
+    if (dwTarget) {
+      const ddx = dwTarget.x - dinoWalker.position.x, ddz = dwTarget.z - dinoWalker.position.z;
+      const dd = Math.hypot(ddx, ddz);
+      if (dd < .4) { dwTarget = null; dwNextMove = t + 2.5 + Math.random()*5; }
+      else {
+        const dir = Math.atan2(ddx, ddz);
+        let dr = dir - dinoWalker.rotation.y;
+        while (dr > Math.PI) dr -= 2*Math.PI; while (dr < -Math.PI) dr += 2*Math.PI;
+        dinoWalker.rotation.y += dr * Math.min(1, dt*4);
+        dinoWalker.position.x += Math.sin(dinoWalker.rotation.y) * 1.5 * dt;
+        dinoWalker.position.z += Math.cos(dinoWalker.rotation.y) * 1.5 * dt;
+      }
+    }
+    dinoWalker.position.y = hills(dinoWalker.position.x, dinoWalker.position.z) + (dwTarget ? Math.abs(Math.sin(t*7))*.09 : 0);
+    dinoWalker.userData.tailG.rotation.y = Math.sin(t*2.6)*.22;
+    const dwg = Math.max(0, 1 - (t - dwGig)*1.3);
+    dinoWalker.scale.setScalar(1 + .14*Math.sin((t - dwGig)*15)*dwg);             // хихикает от тапа
+    dinoWalker.userData.headG.rotation.x = Math.sin(t*1.7)*.07;
+    if (t > dwSay && dLui < 14 && !driving && !bookOpen) {  // фразочка, когда Луи неподалёку
+      dwSay = t + 9 + Math.random()*8;
+      const ph = DINO_PHRASES[Math.floor(Math.random()*DINO_PHRASES.length)];
+      sayWorld(ph[0], ph[1], t);
+      blip(700, .1, 'sine', .15, 1100);
+    }
   }
 
   /* бабочки: разлетаются от Луи и возвращаются домой */
