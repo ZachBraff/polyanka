@@ -18,6 +18,30 @@
     pointer-events:none; opacity:0; transition:opacity .35s; white-space:nowrap;
     box-shadow:0 3px 14px rgba(90,60,30,.18); z-index:6;
   }
+  #titleCard {
+    position:fixed; inset:0; z-index:30;
+    display:flex; flex-direction:column; align-items:center; justify-content:center; gap:10px;
+    background:linear-gradient(180deg, #B48CD9 0%, #E8C9D8 55%, #F2E3C2 100%);
+    font-family: ui-rounded, "SF Pro Rounded", system-ui, sans-serif;
+  }
+  #titleCard h1 {
+    font-size:clamp(52px, 15vw, 96px); color:#FFFFFF; margin:0;
+    text-shadow:0 5px 0 rgba(90, 60, 30, .22);
+  }
+  #titleCard .sub { color:#5A4A6A; font-weight:700; font-size:clamp(14px, 3.5vw, 19px); text-align:center; max-width:86vw; }
+  #titleCard .dino { font-size:clamp(56px, 16vw, 110px); line-height:1; }
+  #playBtn {
+    margin-top:18px; font-size:clamp(20px, 5vw, 28px); padding:14px 52px; border-radius:100px; border:0;
+    background:#FFD93D; color:#4A3300; font-weight:800;
+    box-shadow:0 6px 0 #D9A800, 0 12px 24px rgba(0,0,0,.25); cursor:pointer;
+    animation:pulseBtn 1.6s ease-in-out infinite;
+  }
+  @keyframes pulseBtn { 50% { transform:scale(1.06); } }
+  #sndBtn {
+    position:fixed; top:12px; right:12px; z-index:20; width:46px; height:46px;
+    border-radius:50%; border:0; background:rgba(255,250,240,.88); font-size:22px;
+    box-shadow:0 2px 8px rgba(0,0,0,.2); display:none; cursor:pointer;
+  }
   #joyBase, #joyKnob {
     position:fixed; border-radius:50%; pointer-events:none; display:none; z-index:5;
     transform:translate(-50%,-50%);
@@ -35,6 +59,13 @@
 <div id="hint">Тапни на полянку — Луи пойдёт сам · или веди пальцем · WASD</div>
 <div id="joyBase"></div><div id="joyKnob"></div>
 <div id="word"></div>
+<button id="sndBtn">🔊</button>
+<div id="titleCard">
+  <div class="dino">🦖</div>
+  <h1>Полянка</h1>
+  <div class="sub">домик Дино · все слова по-русски и по-немецки</div>
+  <button id="playBtn">▶ Играть</button>
+</div>
 <script type="module">
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
@@ -980,6 +1011,17 @@ for (let i = 0; i < 10; i++) {
   sp.position.set((Math.random()-.5)*500, 55+Math.random()*35, (Math.random()-.5)*500);
   outdoorG.add(sp); clouds.push(sp);
 }
+/* пыль из-под ног */
+const dust = [];
+function spawnDust() {
+  if (dust.length > 10) return;
+  const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: cloudTex, transparent: true, opacity: .35, depthWrite: false }));
+  s.scale.setScalar(.45);
+  s.position.set(hero.position.x + (Math.random()-.5)*.3, hero.position.y + .12, hero.position.z + (Math.random()-.5)*.3);
+  scene.add(s);
+  dust.push({ s, life: .5 });
+}
+
 /* тени облаков плывут по лугу */
 const cloudShadows = [];
 clouds.forEach(sp => {
@@ -1124,8 +1166,26 @@ let userActed = false;          // был ввод в этом кадре (сб�
 let introDone = false, introP = 0, introFast = false;
 let spoke = false;
 let resetIdle = false;
+let started = false, curSp = 0;
+const bgm = { on: true, next: 0, idx: 3 };
+const BGM_SCALE = [392, 440, 523, 587, 659, 784, 880];   // пентатоника — шкатулка
+let birdNext = 5;
 
 const joyBase = document.getElementById('joyBase'), joyKnob = document.getElementById('joyKnob');
+const sndBtn = document.getElementById('sndBtn');
+document.getElementById('playBtn').addEventListener('click', () => {
+  started = true;
+  document.getElementById('titleCard').style.display = 'none';
+  sndBtn.style.display = 'block';
+  firstGesture();
+  lastInput = clock.elapsedTime;
+  bgm.next = clock.elapsedTime + 1.5;
+});
+sndBtn.addEventListener('pointerdown', e => {
+  e.stopPropagation();
+  bgm.on = !bgm.on;
+  sndBtn.textContent = bgm.on ? '🔊' : '🔇';
+});
 const hintEl = document.getElementById('hint');
 hintEl.textContent = matchMedia('(pointer: coarse)').matches
   ? 'Тапни на полянку — Луи пойдёт сам'
@@ -1249,9 +1309,11 @@ function tapToGo(cx, cy) {
   tapRing.visible = true;
 }
 
-addEventListener('keydown', e => { keys[e.code] = true; userActed = true; introFast = true; firstGesture(); });
+addEventListener('keydown', e => { if (!started) return; keys[e.code] = true; userActed = true; introFast = true; firstGesture(); });
 addEventListener('keyup', e => keys[e.code] = false);
 addEventListener('pointerdown', e => {
+  if (!started) return;
+  if (e.target === sndBtn) return;
   if (joy) return;                                     // второй палец/ладонь игнорируем
   joy = { id: e.pointerId, sx: e.clientX, sy: e.clientY, dx: 0, dy: 0, drag: false };
   userActed = true; introFast = true; firstGesture();
@@ -1399,9 +1461,10 @@ function frame() {
     }
   }
   if (sitting || lying) moving = false;            // сидим или спим — не шагаем
-  if (moving) {
-    hero.position.x += Math.sin(heading)*sp*dt;
-    hero.position.z += Math.cos(heading)*sp*dt;
+  curSp += ((moving ? sp : 0) - curSp) * Math.min(1, dt * 7);   // плавный разгон и торможение
+  if (curSp > .12) {
+    hero.position.x += Math.sin(heading)*curSp*dt;
+    hero.position.z += Math.cos(heading)*curSp*dt;
     if (indoor) {
       if (inKitchen) {
         hero.position.x = THREE.MathUtils.clamp(hero.position.x, RX2 - 8.5, RX2 + 8.4);
@@ -1431,7 +1494,7 @@ function frame() {
         }
       }
     }
-    runPhase += dt*(sp > 4 ? 11 : 7);
+    runPhase += dt*(curSp > 4 ? 11 : 7);
   } else {
     runPhase += dt*2;
   }
@@ -1442,8 +1505,8 @@ function frame() {
   if (modelLoaded) {
     mixer.update(dt);
     const busy = curAction && curAction.loop === THREE.LoopOnce && curAction.isRunning();
-    if (!busy && !sitting) {
-      if (moving) playAnim(sp > 4 ? 'Running_A' : 'Walking_B');
+    if (!busy && !sitting && !lying) {
+      if (curSp > .4) playAnim(curSp > 4 ? 'Running_A' : 'Walking_B');
       else playAnim('Idle');
     }
   } else {
@@ -1536,13 +1599,36 @@ function frame() {
     if (L.life < 0 || L.m.position.y < hills(L.m.position.x, L.m.position.z)) { outdoorG.remove(L.m); leaves.splice(i, 1); }
   }
 
-  /* шаги: мягко по траве, глухо по тропинке */
+  /* шаги: мягко по траве, глухо по тропинке + пыль из-под ног */
   const stepSin = Math.sin(runPhase);
-  if (moving && Math.sign(stepSin) !== Math.sign(prevStepSin)) {
-    if (Math.abs(hero.position.x - pathX(hero.position.z)) < 1.5) blip(110, .05, 'sine', .09);
-    else blip(1500, .05, 'triangle', .045, 500);
+  if (curSp > .8 && Math.sign(stepSin) !== Math.sign(prevStepSin)) {
+    if (indoor) blip(140, .04, 'sine', .06);
+    else if (Math.abs(hero.position.x - pathX(hero.position.z)) < 1.5) { blip(110, .05, 'sine', .09); spawnDust(); }
+    else { blip(1500, .05, 'triangle', .045, 500); spawnDust(); }
   }
   prevStepSin = stepSin;
+  for (let i = dust.length - 1; i >= 0; i--) {
+    const D = dust[i];
+    D.life -= dt;
+    D.s.position.y += dt * .5;
+    D.s.material.opacity = D.life * .7;
+    D.s.scale.setScalar(.45 + (0.5 - D.life) * 1.1);
+    if (D.life <= 0) { scene.remove(D.s); dust.splice(i, 1); }
+  }
+
+  /* музыкальная шкатулка и птицы */
+  if (started && bgm.on && audioCtx && t > bgm.next) {
+    bgm.idx = THREE.MathUtils.clamp(bgm.idx + [ -2, -1, -1, 1, 1, 2 ][(Math.random()*6)|0], 0, 6);
+    const f = BGM_SCALE[bgm.idx];
+    blip(f, 1.3, 'sine', indoor ? .022 : .032);
+    if (Math.random() < .45) blip(f * 2, 1.0, 'sine', .014);
+    bgm.next = t + (Math.random() < .3 ? 1.7 : .85);
+  }
+  if (started && !indoor && bgm.on && t > birdNext) {
+    const base = 2100 + Math.random() * 900;
+    [0, .12, .22].forEach((d, i) => setTimeout(() => blip(base + i * 240, .05, 'sine', .05, base + 500), d * 1000));
+    birdNext = t + 4 + Math.random() * 9;
+  }
 
   /* жизнь комнаты: огонь, мяч, Дино */
   if (indoor) {
@@ -1660,7 +1746,7 @@ function frame() {
     camera.position.lerp(new THREE.Vector3(bx + (hero.position.x - bx)*.35, ROOM_Y + camY, camZ), Math.min(1, dt*3));
     camera.lookAt(hero.position.x*.6 + bx*.4, ROOM_Y + 1.2, hero.position.z*.6 + (bcz - 1)*.4);
   } else if (!introDone) {
-    introP += dt * (introFast ? 3.2 : 1);              // ранний жест ускоряет пролёт, а не рвёт его
+    if (started) introP += dt * (introFast ? 3.2 : 1); // пролёт начинается после кнопки «Играть»
     if (introP >= INTRO_LEN) { introDone = true; hintDeadline = t + 9; }
     const b = THREE.MathUtils.smoothstep(introP / INTRO_LEN, 0, 1);
     const p0 = new THREE.Vector3(HX + 5, hills(HX, HZ) + 4.5, HZ + 12);
