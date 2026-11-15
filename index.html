@@ -56,6 +56,12 @@
     border-radius:50%; border:0; background:rgba(255,250,240,.88); font-size:22px;
     box-shadow:0 2px 8px rgba(0,0,0,.2); display:none; cursor:pointer;
   }
+  #hornBtn {
+    position:fixed; right:16px; bottom:16px; z-index:20; width:68px; height:68px;
+    border-radius:50%; border:0; background:rgba(255,217,61,.95); font-size:32px;
+    box-shadow:0 4px 0 #D9A800, 0 6px 14px rgba(0,0,0,.25); display:none; cursor:pointer;
+  }
+  #hornBtn:active { transform:scale(1.12); }
   #joyBase, #joyKnob {
     position:fixed; border-radius:50%; pointer-events:none; display:none; z-index:5;
     transform:translate(-50%,-50%);
@@ -76,6 +82,7 @@
 <div id="joyBase"></div><div id="joyKnob"></div>
 <div id="word"></div>
 <button id="sndBtn">🔇</button>
+<button id="hornBtn">📯</button>
 <div id="titleCard">
   <div class="dino">🦖</div>
   <h1>Полянка</h1>
@@ -565,6 +572,54 @@ for (let i = 0; i < 5; i++) {                 // дома второго ряд�
   const x = TOWN_X + Math.cos(a) * (RING_R + 6.5), z = TOWN_Z + Math.sin(a) * (RING_R + 6.5);
   house(x, z, .9 + Math.random() * .5, a + Math.PI / 2);
 }
+/* Луи и Дино выглядывают из кабины во время езды */
+function makeHeroHead(s) {
+  const g = new THREE.Group();
+  const head = new THREE.Mesh(new THREE.SphereGeometry(.26*s, 12, 10), toon('#F2C9A8'));
+  const hair = new THREE.Mesh(new THREE.SphereGeometry(.28*s, 12, 10), toon('#F0D27E'));
+  hair.scale.set(1, .88, 1); hair.position.set(0, .09*s, -.04*s);
+  const fringe2 = new THREE.Mesh(new THREE.SphereGeometry(.12*s, 8, 6), toon('#F0D27E'));
+  fringe2.scale.set(1.6, .5, .8); fringe2.position.set(0, .13*s, .2*s);
+  [-1, 1].forEach(sx => {
+    const eye = new THREE.Mesh(new THREE.SphereGeometry(.035*s, 6, 5), toon('#26261F'));
+    eye.position.set(sx*.09*s, .02*s, .23*s);
+    g.add(eye);
+  });
+  g.add(head, hair, fringe2);
+  return g;
+}
+const riders = new THREE.Group();
+const riderLui = makeHeroHead(1);
+riderLui.position.set(.36, 1.5, -.1);
+const riderDino = buildDinoHead(.62);
+riderDino.position.set(-.36, 1.55, -.1);
+riders.add(riderLui, riderDino);
+riders.visible = false;
+driveCar.add(riders);
+
+/* гараж слева от домика — можно заехать */
+const GX = HX - 7.5, GZ = HZ + 2.5;
+const garageG = new THREE.Group();
+const gFloor = new THREE.Mesh(new THREE.BoxGeometry(4.4, .14, 5.2), toon('#9A9AA2'));
+gFloor.position.y = .07;
+const gBack = new THREE.Mesh(new THREE.BoxGeometry(4.4, 2.7, .25), toon('#F3E6CC'));
+gBack.position.set(0, 1.35, -2.45);
+const gDark = new THREE.Mesh(new THREE.BoxGeometry(3.9, 2.4, .1), new THREE.MeshBasicMaterial({ color: '#2A2520' }));
+gDark.position.set(0, 1.25, -2.28);
+const gSideL = new THREE.Mesh(new THREE.BoxGeometry(.25, 2.7, 5.2), toon('#F3E6CC'));
+gSideL.position.set(-2.2, 1.35, 0);
+const gSideR = gSideL.clone(); gSideR.position.x = 2.2;
+const gRoof = new THREE.Mesh(new THREE.BoxGeometry(5.0, .3, 5.8), toon('#C96B47'));
+gRoof.position.set(0, 2.85, 0); gRoof.rotation.x = .05;
+const gPostL = new THREE.Mesh(new THREE.BoxGeometry(.3, 2.7, .3), toon('#8A5F3C'));
+gPostL.position.set(-2.1, 1.35, 2.5);
+const gPostR = gPostL.clone(); gPostR.position.x = 2.1;
+const gLintel = new THREE.Mesh(new THREE.BoxGeometry(4.6, .35, .3), toon('#8A5F3C'));
+gLintel.position.set(0, 2.6, 2.5);
+garageG.add(gFloor, gBack, gDark, gSideL, gSideR, gRoof, gPostL, gPostR, gLintel);
+garageG.position.set(GX, hills(GX, GZ), GZ);
+outdoorG.add(garageG);
+
 let driving = false, carPending = false, motorNext = 0;
 
 
@@ -1371,6 +1426,14 @@ sndBtn.addEventListener('pointerdown', e => {
   bgm.on = !bgm.on;
   sndBtn.textContent = bgm.on ? '🔊' : '🔇';
 });
+const hornBtn = document.getElementById('hornBtn');
+hornBtn.addEventListener('pointerdown', e => {
+  e.stopPropagation();
+  blip(520, .18, 'square', .18, 430);
+  blip(390, .24, 'square', .15, 330);
+  setTimeout(() => { blip(520, .15, 'square', .15, 430); }, 260);   // би-би-биии!
+  sayWorld('Би-би!', 'Tut-tut!', clock.elapsedTime);
+});
 const hintEl = document.getElementById('hint');
 hintEl.textContent = matchMedia('(pointer: coarse)').matches
   ? 'Тапни на полянку — Луи пойдёт сам'
@@ -1470,7 +1533,19 @@ function tapToGo(cx, cy) {
     }
   }
   if (!indoor) {                                    // машины на улице: своя — едем, чужая — бибикает
+    const hitsG = ray.intersectObject(garageG, true);
     const hitsCar = ray.intersectObjects([driveCar, ...parkedCars], true);
+    if (hitsG.length && (!hitsCar.length || hitsG[0].distance < hitsCar[0].distance)) {
+      blip(880, .07, 'triangle', .1);
+      sayWorld('Гараж!', 'Die Garage!', clock.elapsedTime);
+      // за рулём — заезжаем внутрь (там сработает парковка), пешком — подходим к воротам
+      const gz = driving ? GZ - .6 : GZ + 3.6;
+      walkTarget = { x: GX, z: gz };
+      autoWalk = false;
+      tapRing.position.set(GX, hills(GX, GZ + 3.6) + .06, GZ + 3.6);
+      tapRing.visible = !driving;
+      return;
+    }
     if (hitsCar.length) {
       let root = hitsCar[0].object;
       while (root.parent && root.parent !== outdoorG) root = root.parent;
@@ -1525,7 +1600,7 @@ addEventListener('keydown', e => { if (!started) return; keys[e.code] = true; us
 addEventListener('keyup', e => keys[e.code] = false);
 addEventListener('pointerdown', e => {
   if (!started) return;
-  if (e.target === sndBtn) return;
+  if (e.target === sndBtn || e.target === hornBtn) return;
   if (joy) return;                                     // второй палец/ладонь игнорируем
   joy = { id: e.pointerId, sx: e.clientX, sy: e.clientY, dx: 0, dy: 0, drag: false };
   userActed = true; introFast = true; firstGesture();
@@ -1583,6 +1658,17 @@ window.__tap = (cx, cy) => tapToGo(cx, cy);
 window.__carProbe = (cx, cy) => {
   ray.setFromCamera(new THREE.Vector2(cx/innerWidth*2 - 1, -(cy/innerHeight)*2 + 1), camera);
   return ray.intersectObjects([driveCar, ...parkedCars], true).length;
+};
+window.__garProbe = (cx, cy) => {
+  ray.setFromCamera(new THREE.Vector2(cx/innerWidth*2 - 1, -(cy/innerHeight)*2 + 1), camera);
+  return ray.intersectObject(garageG, true).length;
+};
+window.__car = () => ({ x: +driveCar.position.x.toFixed(1), z: +driveCar.position.z.toFixed(1), driving });
+window.__scr = () => {
+  const toPx = v => [ (v.x + 1) / 2 * innerWidth, (1 - v.y) / 2 * innerHeight ];
+  const c = driveCar.position.clone(); c.y += .6; c.project(camera);
+  const g = new THREE.Vector3(GX, hills(GX, GZ) + 1.2, GZ + 1).project(camera);
+  return { car: toPx(c), gar: toPx(g) };
 };
 window.__probe = (cx, cy) => {
   ray.setFromCamera(new THREE.Vector2(cx/innerWidth*2 - 1, -(cy/innerHeight)*2 + 1), camera);
@@ -1716,6 +1802,25 @@ function frame() {
           walkTarget = null; tapRing.visible = false;
         }
       }
+      /* гараж: стены настоящие, заехал на машине — припарковался */
+      const gdx = hero.position.x - GX, gdz = hero.position.z - GZ;
+      if (Math.abs(gdx) < 2.35 && gdz > -2.7 && gdz < 2.5) {
+        if (Math.abs(gdx) > 1.6) {
+          hero.position.x = GX + Math.sign(gdx) * 2.35;        // бока непроходимы
+        } else {
+          if (gdz < -1.7) hero.position.z = GZ - 1.7;          // задняя стена
+          if (driving && gdz < .5) {                            // заехал — паркуемся!
+            driving = false;
+            hero.visible = true;
+            hero.position.set(GX, 0, GZ + 3.6);
+            driveCar.position.set(GX, hills(GX, GZ - .9) + .04, GZ - .9);   // аккуратно внутрь
+            driveCar.rotation.y = 0;                                        // носом к выходу
+            walkTarget = null; tapRing.visible = false;
+            blip(300, .25, 'sawtooth', .05, 50);
+            sayWorld('Гараж!', 'Die Garage!', t);
+          }
+        }
+      }
     }
     runPhase += dt*(curSp > 4 ? 11 : 7);
   } else {
@@ -1822,9 +1927,14 @@ function frame() {
   }
 
   /* машина следует за «пилотом»: рык мотора и выхлоп */
+  riders.visible = driving;
+  hornBtn.style.display = driving ? 'block' : 'none';
   if (driving) {
     driveCar.position.set(hero.position.x, hills(hero.position.x, hero.position.z) + .04, hero.position.z);
     driveCar.rotation.y = heading;
+    riderLui.rotation.z = Math.sin(t*7) * .06;                     // головы качаются в такт
+    riderDino.rotation.z = Math.sin(t*7 + 1.3) * .07;
+    riderDino.rotation.y = Math.sin(t*1.9) * .3;
     if (t > motorNext) {
       blip(55 + curSp * 5, .15, 'sawtooth', .045, 85 + curSp * 5);
       motorNext = t + .16;
