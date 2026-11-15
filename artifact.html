@@ -2,6 +2,11 @@
 <style>
   * { margin:0; padding:0; box-sizing:border-box; -webkit-user-select:none; user-select:none; touch-action:none; }
   html, body { height:100%; overflow:hidden; background:#CDA8DF; }
+  canvas { filter:saturate(1.07) contrast(1.02); }
+  #vig {
+    position:fixed; inset:0; pointer-events:none; z-index:5;
+    background:radial-gradient(ellipse at 50% 42%, transparent 52%, rgba(60, 30, 70, .16) 100%);
+  }
   #hint {
     position:fixed; left:50%; bottom:3vh; transform:translateX(-50%);
     font-family: ui-rounded, "SF Pro Rounded", system-ui, sans-serif;
@@ -56,6 +61,7 @@
 } }
 </script>
 
+<div id="vig"></div>
 <div id="hint">Тапни на полянку — Луи пойдёт сам · или веди пальцем · WASD</div>
 <div id="joyBase"></div><div id="joyKnob"></div>
 <div id="word"></div>
@@ -153,7 +159,28 @@ for (let i = 0; i < pos.count; i++) {
 }
 terGeo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
 terGeo.computeVertexNormals();
-const terrain = new THREE.Mesh(terGeo, new THREE.MeshToonMaterial({ vertexColors: true, gradientMap: toonTex }));
+/* живописная пятнистость луга: светлая мультипликативная текстура поверх цветов вершин */
+const meadowTex = (() => {
+  const cv = document.createElement('canvas'); cv.width = cv.height = 512;
+  const c2 = cv.getContext('2d');
+  c2.fillStyle = '#F4FCEA'; c2.fillRect(0, 0, 512, 512);
+  for (let i = 0; i < 70; i++) {
+    const r = 30 + Math.random()*70;
+    const g2 = c2.createRadialGradient(0, 0, 0, 0, 0, r);
+    const tone = ['rgba(210,240,185,.5)', 'rgba(255,255,240,.45)', 'rgba(190,225,170,.4)'][i % 3];
+    g2.addColorStop(0, tone); g2.addColorStop(1, 'rgba(255,255,255,0)');
+    c2.save();
+    c2.translate(Math.random()*512, Math.random()*512);
+    c2.fillStyle = g2;
+    c2.fillRect(-r, -r, r*2, r*2);
+    c2.restore();
+  }
+  const t = new THREE.CanvasTexture(cv);
+  t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  t.repeat.set(26, 26);
+  return t;
+})();
+const terrain = new THREE.Mesh(terGeo, new THREE.MeshToonMaterial({ vertexColors: true, gradientMap: toonTex, map: meadowTex }));
 outdoorG.add(terrain);
 
 /* невидимая грубая сетка только для рейкаста тапов (40×40 вместо 96×96) */
@@ -178,7 +205,8 @@ while (bi < BLADES) {
   offsets[bi*3] = x; offsets[bi*3+1] = hills(x, z); offsets[bi*3+2] = z;
   scales[bi] = .7 + Math.random()*.9;
   rots[bi] = Math.random()*Math.PI;
-  tints[bi] = Math.random();
+  // пятна светлой и тёмной травы, как мазки кисти, а не случайный шум
+  tints[bi] = THREE.MathUtils.clamp(.5 + .45*Math.sin(x*.045)*Math.sin(z*.05) + (Math.random()-.5)*.3, 0, 1);
   bi++;
 }
 const grassGeo = new THREE.InstancedBufferGeometry();
@@ -279,13 +307,17 @@ outdoorG.add(flowerMesh);
 const treeList = [];
 function tree(x, z, s) {
   const g = new THREE.Group();
-  const trunk = new THREE.Mesh(new THREE.CylinderGeometry(.15*s, .22*s, 1.2*s, 6), toon('#8A5F3C'));
-  trunk.position.y = .6*s;
-  const c1 = new THREE.Mesh(new THREE.IcosahedronGeometry(1.1*s, 0), toon('#55923B'));
-  c1.position.y = 1.7*s;
-  const c2 = new THREE.Mesh(new THREE.IcosahedronGeometry(.8*s, 0), toon('#6AAE45'));
-  c2.position.set(.5*s, 2.2*s, .2*s);
-  g.add(trunk, c1, c2);
+  const trunk = new THREE.Mesh(new THREE.CylinderGeometry(.14*s, .24*s, 1.3*s, 7), toon('#7A5236'));
+  trunk.position.y = .65*s;
+  g.add(trunk);
+  // слоёная крона: тёмный низ → светлый верх → блик (живописные «пуфы»)
+  [['#44802C', 1.05, 1.5, 0, 0], ['#55923B', .9, 2.0, .35, .2], ['#55923B', .85, 2.0, -.4, -.15],
+   ['#6CB246', .78, 2.5, .1, .1], ['#8ED161', .45, 2.95, -.15, .25]].forEach(([col, r, y, ox, oz]) => {
+    const p = new THREE.Mesh(new THREE.SphereGeometry(r*s, 10, 8), toon(col));
+    p.scale.y = .82;
+    p.position.set(ox*s, y*s, oz*s);
+    g.add(p);
+  });
   g.position.set(x, hills(x,z), z);
   g.rotation.y = Math.random()*Math.PI;
   outdoorG.add(g);
@@ -966,7 +998,7 @@ for (let i = 0; i < 7; i++) {
   outdoorG.add(b); flies.push(b);
 }
 
-/* два ряда рельефа на горизонте: мягкие зелёные холмы + горы со снегом */
+/* мягкие зелёные холмы среднего плана */
 for (let i = 0; i < 18; i++) {
   const a = i/18*Math.PI*2 + Math.random()*.2;
   const r = 165 + Math.random()*35;
@@ -976,22 +1008,74 @@ for (let i = 0; i < 18; i++) {
   hill.scale.y = .9;
   outdoorG.add(hill);
 }
-for (let i = 0; i < 14; i++) {
-  const a = i/14*Math.PI*2 + .2 + Math.random()*.2;
-  const r = 235 + Math.random()*50;
-  const x = Math.cos(a)*r, z = Math.sin(a)*r;
-  const h = 42 + Math.random()*36;
-  const m = new THREE.Mesh(new THREE.ConeGeometry(55+Math.random()*30, h, 7), toon('#5F7A58'));
-  m.position.set(x, h/2-10, z);
-  m.rotation.y = Math.random();
-  m.scale.x = .85 + Math.random()*.6;
-  outdoorG.add(m);
-  const snow = new THREE.Mesh(new THREE.ConeGeometry(13, h*.24, 7), toon('#F4EFF2'));
-  snow.position.set(x, h-10-h*.12, z);
-  snow.rotation.y = m.rotation.y;
-  snow.scale.x = m.scale.x;
-  outdoorG.add(snow);
+/* нарисованное кольцо горных хребтов вокруг всего мира */
+function ridgeTexture(w, hgt, peakLo, peakHi, cTop, cBase, snow) {
+  const cv = document.createElement('canvas'); cv.width = w; cv.height = hgt;
+  const c2 = cv.getContext('2d');
+  const pts = [];
+  const n = 18;
+  for (let i = 0; i <= n; i++) {
+    const px = i / n * w;
+    const py = hgt * (1 - (peakLo + Math.random() * (peakHi - peakLo)) * (0.6 + 0.4 * Math.sin(i * 2.7)));
+    pts.push([px, py]);
+  }
+  pts[n][1] = pts[0][1];                                  // бесшовный стык по кругу
+  const g = c2.createLinearGradient(0, 0, 0, hgt);
+  g.addColorStop(0, cTop); g.addColorStop(1, cBase);
+  c2.fillStyle = g;
+  c2.beginPath();
+  c2.moveTo(0, hgt);
+  c2.lineTo(pts[0][0], pts[0][1]);
+  for (let i = 1; i <= n; i++) {
+    const [x1, y1] = pts[i - 1], [x2, y2] = pts[i];
+    c2.quadraticCurveTo(x1 + (x2 - x1) * .5, Math.min(y1, y2) - 12, x2, y2);
+  }
+  c2.lineTo(w, hgt);
+  c2.closePath(); c2.fill();
+  if (snow) {                                             // снежные шапки на пиках
+    c2.fillStyle = snow;
+    pts.forEach(([px, py], i) => {
+      if (i % 3 === 1) {
+        c2.beginPath();
+        c2.moveTo(px - 26, py + 26);
+        c2.quadraticCurveTo(px, py - 8, px + 26, py + 26);
+        c2.closePath(); c2.fill();
+      }
+    });
+  }
+  const t = new THREE.CanvasTexture(cv);
+  t.wrapS = THREE.RepeatWrapping;
+  return t;
 }
+function ridgeRing(radius, height, yBase, tex, reps, opacity) {
+  tex.repeat.set(reps, 1);
+  const geo = new THREE.CylinderGeometry(radius, radius, height, 48, 1, true);
+  const mat = new THREE.MeshBasicMaterial({ map: tex, side: THREE.BackSide, transparent: true, opacity, fog: false, depthWrite: false });
+  const m = new THREE.Mesh(geo, mat);
+  m.position.y = yBase + height / 2;
+  outdoorG.add(m);
+  return m;
+}
+ridgeRing(300, 150, -18, ridgeTexture(1024, 256, .45, .8, '#C9B2DA', '#A897C4', 'rgba(248,240,250,.9)'), 3, .88); // дальние, лилово-снежные
+ridgeRing(240, 110, -14, ridgeTexture(1024, 256, .35, .66, '#86A383', '#6E8F6F', null), 4, .92);                  // ближние, зелёно-дымчатые
+
+/* солнце с тёплым гало над деревней */
+const sunTex = (() => {
+  const cv = document.createElement('canvas'); cv.width = cv.height = 256;
+  const c2 = cv.getContext('2d');
+  const g = c2.createRadialGradient(128, 128, 8, 128, 128, 128);
+  g.addColorStop(0, 'rgba(255,245,215,1)');
+  g.addColorStop(.25, 'rgba(255,225,160,.8)');
+  g.addColorStop(.6, 'rgba(255,190,140,.3)');
+  g.addColorStop(1, 'rgba(255,180,150,0)');
+  c2.fillStyle = g; c2.fillRect(0, 0, 256, 256);
+  return new THREE.CanvasTexture(cv);
+})();
+const sunSprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: sunTex, blending: THREE.AdditiveBlending, depthWrite: false, fog: false, opacity: .85 }));
+sunSprite.scale.set(140, 140, 1);
+sunSprite.material.opacity = .6;
+sunSprite.position.set(-150, 110, -460);
+outdoorG.add(sunSprite);
 
 /* облака */
 const cloudTex = (() => {
@@ -1004,11 +1088,33 @@ const cloudTex = (() => {
   ctx.fillStyle = g; ctx.fillRect(0,0,128,128);
   return new THREE.CanvasTexture(cv);
 })();
+/* рисованные кучевые облака: белые купола с розовой подсветкой снизу */
+function paintCloud() {
+  const cv = document.createElement('canvas'); cv.width = 320; cv.height = 180;
+  const c2 = cv.getContext('2d');
+  const puffs = [];
+  const n = 7 + (Math.random()*4|0);
+  for (let i = 0; i < n; i++) {
+    const px = 50 + (i / (n-1)) * 220 + (Math.random()-.5)*26;
+    const pr = 26 + Math.random()*30 * (1 - Math.abs(i/(n-1) - .5));
+    const py = 118 - pr*.65 - Math.random()*22;
+    puffs.push([px, py, pr]);
+  }
+  c2.fillStyle = '#EFC2CE';                        // розовое брюшко
+  puffs.forEach(([px, py, pr]) => { c2.beginPath(); c2.arc(px, py + pr*.4, pr, 0, 7); c2.fill(); });
+  c2.fillStyle = '#FFFFFF';                        // белые купола
+  puffs.forEach(([px, py, pr]) => { c2.beginPath(); c2.arc(px, py, pr, 0, 7); c2.fill(); });
+  c2.fillStyle = '#FFF6E8';                        // тёплый блик сверху
+  puffs.forEach(([px, py, pr]) => { c2.beginPath(); c2.arc(px - pr*.2, py - pr*.3, pr*.55, 0, 7); c2.fill(); });
+  const t = new THREE.CanvasTexture(cv);
+  return t;
+}
 const clouds = [];
-for (let i = 0; i < 10; i++) {
-  const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: cloudTex, transparent: true, opacity: .9, fog: false }));
-  sp.scale.set(60+Math.random()*50, 24+Math.random()*16, 1);
-  sp.position.set((Math.random()-.5)*500, 55+Math.random()*35, (Math.random()-.5)*500);
+for (let i = 0; i < 7; i++) {
+  const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: paintCloud(), transparent: true, opacity: .96, fog: false }));
+  const s = 70 + Math.random()*70;
+  sp.scale.set(s, s*.55, 1);
+  sp.position.set((Math.random()-.5)*500, 60+Math.random()*40, (Math.random()-.5)*500);
   outdoorG.add(sp); clouds.push(sp);
 }
 /* пыль из-под ног */
