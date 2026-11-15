@@ -69,7 +69,7 @@
 <div id="hint">Тапни на полянку — Луи пойдёт сам · или веди пальцем · WASD</div>
 <div id="joyBase"></div><div id="joyKnob"></div>
 <div id="word"></div>
-<button id="sndBtn">🔊</button>
+<button id="sndBtn">🔇</button>
 <div id="titleCard">
   <div class="dino">🦖</div>
   <h1>Полянка</h1>
@@ -1177,7 +1177,7 @@ let introDone = false, introP = 0, introFast = false;
 let spoke = false;
 let resetIdle = false;
 let started = false, curSp = 0;
-const bgm = { on: true, next: 0, idx: 3 };
+const bgm = { on: false, next: 0, idx: 3 };   // музыка и птицы по умолчанию выключены (🔇 в углу)
 const BGM_SCALE = [392, 440, 523, 587, 659, 784, 880];   // пентатоника — шкатулка
 let birdNext = 5;
 
