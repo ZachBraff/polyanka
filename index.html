@@ -681,7 +681,8 @@ gKnob.position.set(1.9, .95, .75);
 garageG.add(gFloor, gBack, gDark, gSideL, gSideR, gRoof, gPostL, gPostR, gLintel, gDoorFrame, gInDoor, gKnob);
 garageG.position.set(GX, hills(GX, GZ), GZ);
 outdoorG.add(garageG);
-const gFloorY = (x, z) => (Math.abs(x - GX) < 2.2 && z - GZ > -2.6 && z - GZ < 2.6) ? .14 : 0;   // пол гаража приподнят
+const inGaragePad = (x, z) => Math.abs(x - GX) < 2.2 && z - GZ > -2.6 && z - GZ < 2.6;
+const gFloorY = (x, z) => inGaragePad(x, z) ? (hills(GX, GZ) + .14) - hills(x, z) : 0;   // добавка до ПЛОСКОГО верха плиты
 
 let driving = false, carPending = false, motorNext = 0;
 
@@ -1766,9 +1767,14 @@ function tapToGo(cx, cy) {
       if (!driving && [gInDoor, gKnob, gDoorFrame].includes(hitsG[0].object)) {   // дверь в дом
         blip(880, .07, 'triangle', .1);
         sayWorld('Дверь!', 'Die Tür!', clock.elapsedTime);
+        const inPad = inGaragePad(hero.position.x, hero.position.z);
+        if (inPad && Math.hypot(hero.position.x - (GX + 1.7), hero.position.z - (GZ + .4)) < 1.8) {
+          wordCool = -9; enterRoom();                           // стоит у самой двери — заходим сразу
+          outdoorReturn = { x: GX, z: GZ + 3.4, h: Math.PI };
+          return;
+        }
         // прямой путь — только из гаража или с юга через ворота; сбоку/сзади сперва подойдём к воротам
-        const clearPath = gFloorY(hero.position.x, hero.position.z) > 0 ||
-          (hero.position.z > GZ + 2.5 && Math.abs(hero.position.x - GX) < 3);
+        const clearPath = inPad || (hero.position.z > GZ + 2.5 && Math.abs(hero.position.x - GX) < 3);
         walkTarget = clearPath ? { x: GX + 1.7, z: GZ + .4 } : { x: GX, z: GZ + 3.4 };
         autoWalk = false; tapRing.visible = false;
         return;
@@ -1792,7 +1798,7 @@ function tapToGo(cx, cy) {
           driving = false;
           hero.visible = true;
           hero.position.set(driveCar.position.x + 1.7, 0, driveCar.position.z);
-          if (gFloorY(hero.position.x, hero.position.z))       // в гараже не высаживаем в дверь
+          if (inGaragePad(hero.position.x, hero.position.z))   // в гараже не высаживаем в дверь
             hero.position.x = Math.min(hero.position.x, GX + 1.2);
           walkTarget = null; tapRing.visible = false;
           blip(300, .2, 'sawtooth', .05, 60);
@@ -1948,7 +1954,7 @@ function frame() {
   /* заскучал на 6 секунд — Луи сам идёт по тропинке к домику */
   const dHouseNow = Math.hypot(hero.position.x - HX, hero.position.z - (HZ + 1.8));
   if (!indoor && !driving && !manual && !walkTarget && introDone && !doorOpen && dHouseNow > 4 && t - lastInput > 6
-      && !gFloorY(hero.position.x, hero.position.z)) {   // в гараже автопрогулка не утаскивает в дом
+      && !inGaragePad(hero.position.x, hero.position.z)) {   // в гараже автопрогулка не утаскивает в дом
     autoWalk = true;
     const wz = hero.position.z - 12;
     walkTarget = wz <= HZ + 4 ? { x: HX, z: HZ + 2.2 }      // финальный шаг — к самой двери
@@ -1963,6 +1969,7 @@ function frame() {
     }
     sitting = false; lying = false;
   }
+  const preGdx = hero.position.x - GX, preGdz = hero.position.z - GZ;   // где были ДО шага — для честных стен гаража
   let moving = false, sp = driving ? 13 : indoor ? 4.6 : 5.2;
   if (manual) {
     // в комнате камера неподвижна → направления экранные («вверх» = вглубь), без camYaw
@@ -2045,21 +2052,21 @@ function frame() {
       /* гараж: стены настоящие, заехал на машине — припарковался */
       const gdx = hero.position.x - GX, gdz = hero.position.z - GZ;
       if (Math.abs(gdx) < 2.35 && gdz > -2.7 && gdz < 2.5) {
-        if (!driving && gdx > 1.45 && gdx < 2.0 && Math.abs(gdz - .4) < .75) {   // дверь: из гаража в дом
+        if (!driving && gdx > 1.45 && gdx < 2.0 && Math.abs(gdz - .4) < .6) {    // дверь: из гаража в дом
           wordCool = -9;                                                         // пусть «Домик!» прозвучит
           enterRoom();
           outdoorReturn = { x: GX, z: GZ + 3.4, h: Math.PI };                    // выход вернёт к воротам гаража
         } else if (Math.abs(gdx) > 1.6) {
-          // бока непроходимы: выталкиваем в БЛИЖНЮЮ сторону (изнутри — внутрь, снаружи — наружу)
-          hero.position.x = GX + Math.sign(gdx) * (Math.abs(gdx) < 1.975 ? 1.6 : 2.35);
+          // бока непроходимы: выталкиваем в ту сторону, ОТКУДА пришёл (быстрый кадр не протащит сквозь стену)
+          hero.position.x = GX + Math.sign(gdx) * (Math.abs(preGdx) < 1.975 ? 1.6 : 2.35);
           if (gdz < -1.7) hero.position.z = GZ - 2.75;         // задний угол не затягивает внутрь
         } else {
-          if (gdz < -1.7) hero.position.z = GZ - 1.7;          // задняя стена
-          if (driving && gdz < .5) {                            // заехал — паркуемся!
+          if (gdz < -1.7) hero.position.z = GZ + (preGdz < -2.2 ? -2.75 : -1.7);   // задняя стена честная с обеих сторон
+          if (driving && gdz < .5 && preGdz >= .5) {            // заехал С УЛИЦЫ — паркуемся (изнутри можно выехать)
             driving = false;
             hero.visible = true;
             hero.position.set(GX, 0, GZ + 3.6);
-            driveCar.position.set(GX, hills(GX, GZ - .9) + .18, GZ - .9);   // аккуратно внутрь, на пол
+            driveCar.position.set(GX, hills(GX, GZ) + .18, GZ - .9);        // аккуратно внутрь, на плоский пол
             driveCar.rotation.y = 0;                                        // носом к выходу
             walkTarget = null; tapRing.visible = false;
             blip(300, .25, 'sawtooth', .05, 50);
