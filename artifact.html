@@ -143,6 +143,20 @@ function hills(x, z) {
 }
 const pathX = z => 3.5*Math.sin(z*0.045) + 1.5*Math.sin(z*0.013+2.0);
 
+/* дороги городка: кольцо вокруг деревни + улица к домику Дино */
+const TOWN_X = -38, TOWN_Z = -110, RING_R = 20;
+function distSeg(px, pz, ax, az, bx, bz) {
+  const dx = bx-ax, dz = bz-az;
+  const t = Math.max(0, Math.min(1, ((px-ax)*dx + (pz-az)*dz) / (dx*dx + dz*dz)));
+  return Math.hypot(px - (ax + dx*t), pz - (az + dz*t));
+}
+function nearRoad(x, z) {
+  const dRing = Math.abs(Math.hypot(x - TOWN_X, z - TOWN_Z) - RING_R);
+  if (dRing < 2.4) return true;
+  if (distSeg(x, z, 2, -46, TOWN_X + RING_R - 1, TOWN_Z + 6) < 2.4) return true;   // улица от домика к кольцу
+  return false;
+}
+
 const terGeo = new THREE.PlaneGeometry(SIZE, SIZE, 96, 96);
 terGeo.rotateX(-Math.PI/2);
 const pos = terGeo.attributes.position;
@@ -153,7 +167,8 @@ for (let i = 0; i < pos.count; i++) {
   const y = hills(x, z);
   pos.setY(i, y);
   const dPath = Math.abs(x - pathX(z));
-  const c = dPath < 1.4 ? PATH_C.clone().lerp(new THREE.Color('#B89465'), Math.random()*.3)
+  const c = nearRoad(x, z) ? new THREE.Color('#8E8E96').lerp(new THREE.Color('#7C7C86'), Math.random()*.4)
+          : dPath < 1.4 ? PATH_C.clone().lerp(new THREE.Color('#B89465'), Math.random()*.3)
           : GRASS_A.clone().lerp(GRASS_B, THREE.MathUtils.clamp((y+2)/6, 0, 1));
   colors.push(c.r, c.g, c.b);
 }
@@ -202,6 +217,7 @@ while (bi < BLADES) {
   // трава густо — в игровом коридоре вокруг тропинки и деревни
   const x = (Math.random()-.5)*300, z = -50 + (Math.random()-.5)*320;
   if (Math.abs(x - pathX(z)) < 1.3) continue;           // тропинка без травы
+  if (nearRoad(x, z)) continue;                         // и асфальт тоже
   offsets[bi*3] = x; offsets[bi*3+1] = hills(x, z); offsets[bi*3+2] = z;
   scales[bi] = .7 + Math.random()*.9;
   rots[bi] = Math.random()*Math.PI;
@@ -268,7 +284,7 @@ const FPAL = [[1,1,1],[1,.85,.9],[1,.95,.6],[.85,.8,1]];
 let fi = 0;
 while (fi < FLOWERS) {
   const x = (Math.random()-.5)*300, z = -50 + (Math.random()-.5)*320;
-  if (Math.abs(x - pathX(z)) < 1.6) continue;
+  if (Math.abs(x - pathX(z)) < 1.6 || nearRoad(x, z)) continue;
   fOff[fi*3] = x; fOff[fi*3+1] = hills(x,z)+.3+Math.random()*.2; fOff[fi*3+2] = z;
   const c = FPAL[(Math.random()*FPAL.length)|0];
   fCol[fi*3] = c[0]; fCol[fi*3+1] = c[1]; fCol[fi*3+2] = c[2];
@@ -375,6 +391,8 @@ blades.position.set(0, 5.4, 1.3);
 mill.add(tower, cap, blades);
 mill.position.set(VX+16, hills(VX+16, VZ+6), VZ+6);
 outdoorG.add(mill);
+
+
 
 /* ================= настоящий динозаврик ================= */
 function buildDinoHead(s) {
@@ -489,6 +507,56 @@ dinoHead.position.set(.28, 1.15, .9);
 houseG.add(hw, hroof, chim, winm, doorway, doorPivot, dinoHead);
 houseG.position.set(HX, hills(HX, HZ), HZ);
 outdoorG.add(houseG);
+
+/* ================= городок: машина Луи, соседи, фонари ================= */
+function makeCar(color) {
+  const g = new THREE.Group();
+  const body = new THREE.Mesh(new THREE.BoxGeometry(1.5, .55, 2.7), toon(color)); body.position.y = .62;
+  const cab = new THREE.Mesh(new THREE.BoxGeometry(1.25, .55, 1.3), toon('#BFE3F2')); cab.position.set(0, 1.12, -.1);
+  g.add(body, cab);
+  [[-.72, .95], [.72, .95], [-.72, -.95], [.72, -.95]].forEach(([wx, wz]) => {
+    const w = new THREE.Mesh(new THREE.CylinderGeometry(.3, .3, .22, 12), toon('#3A3A3A'));
+    w.rotation.z = Math.PI/2;
+    w.position.set(wx, .3, wz);
+    g.add(w);
+  });
+  [-.45, .45].forEach(fx => {
+    const lamp = new THREE.Mesh(new THREE.SphereGeometry(.09, 8, 6), toon('#FFE9A8'));
+    lamp.position.set(fx, .68, 1.38);
+    g.add(lamp);
+  });
+  return g;
+}
+const driveCar = makeCar('#E05548');          // машина Луи у домика Дино
+driveCar.position.set(HX + 5.5, hills(HX + 5.5, HZ + 2), HZ + 2);
+driveCar.rotation.y = .4;
+outdoorG.add(driveCar);
+const parkedCars = [];
+[['#5B7FD4', TOWN_X + RING_R + 3.4, TOWN_Z - 4, 1.6],
+ ['#F2D24B', TOWN_X - RING_R - 3.2, TOWN_Z + 5, -1.5],
+ ['#8E6FD4', TOWN_X + 6, TOWN_Z + RING_R + 3.4, 3.1]].forEach(([col, x, z, ry]) => {
+  const c = makeCar(col);
+  c.position.set(x, hills(x, z), z);
+  c.rotation.y = ry;
+  outdoorG.add(c);
+  parkedCars.push(c);
+});
+for (let i = 0; i < 6; i++) {                 // фонари вдоль кольцевой
+  const a = i / 6 * Math.PI * 2;
+  const x = TOWN_X + Math.cos(a) * (RING_R + 3.4), z = TOWN_Z + Math.sin(a) * (RING_R + 3.4);
+  const pole = new THREE.Mesh(new THREE.CylinderGeometry(.07, .09, 2.8, 8), toon('#5A5A62'));
+  pole.position.set(x, hills(x, z) + 1.4, z);
+  const bulb = new THREE.Mesh(new THREE.SphereGeometry(.2, 10, 8), new THREE.MeshBasicMaterial({ color: '#FFE9A8' }));
+  bulb.position.set(x, hills(x, z) + 2.9, z);
+  outdoorG.add(pole, bulb);
+}
+for (let i = 0; i < 5; i++) {                 // дома второго ряда, лицом к дороге
+  const a = .5 + i / 5 * Math.PI * 2;
+  const x = TOWN_X + Math.cos(a) * (RING_R + 6.5), z = TOWN_Z + Math.sin(a) * (RING_R + 6.5);
+  house(x, z, .9 + Math.random() * .5, a + Math.PI / 2);
+}
+let driving = false, carPending = false, motorNext = 0;
+
 
 let doorOpen = false, doorAnim = 0, knockT = -9;
 let audioCtx = null;            // ОДИН общий контекст, создаётся жестом
@@ -1391,6 +1459,33 @@ function tapToGo(cx, cy) {
       }
     }
   }
+  if (!indoor) {                                    // машины на улице: своя — едем, чужая — бибикает
+    const hitsCar = ray.intersectObjects([driveCar, ...parkedCars], true);
+    if (hitsCar.length) {
+      let root = hitsCar[0].object;
+      while (root.parent && root.parent !== outdoorG) root = root.parent;
+      const tn = clock.elapsedTime;
+      if (root === driveCar) {
+        if (driving) {                              // тап по своей машине в пути = выйти
+          driving = false;
+          hero.visible = true;
+          hero.position.set(driveCar.position.x + 1.7, 0, driveCar.position.z);
+          walkTarget = null; tapRing.visible = false;
+          blip(300, .2, 'sawtooth', .05, 60);
+          sayWorld('Приехали!', 'Angekommen!', tn);
+        } else {                                    // подбежать и сесть
+          carPending = true;
+          walkTarget = { x: driveCar.position.x + 1.5, z: driveCar.position.z };
+          tapRing.visible = false;
+          sayWorld('Машина!', 'Das Auto!', tn);
+        }
+      } else {
+        blip(620, .12, 'square', .14, 500); blip(470, .16, 'square', .12, 380);   // би-би!
+        sayWorld('Машина!', 'Das Auto!', tn);
+      }
+      return;
+    }
+  }
   const hit = ray.intersectObject(indoor ? (inKitchen ? kitFloor : inPlay ? playFloor : roomFloor) : rayGround)[0];
   if (!hit) return;
   let tx, tz;
@@ -1475,6 +1570,10 @@ window.__pos = () => ({ x: +hero.position.x.toFixed(1), z: +hero.position.z.toFi
   target: walkTarget, auto: autoWalk, intro: introDone });
 window.__tp = (x, z) => { hero.position.set(x, hills(x, z), z); };
 window.__tap = (cx, cy) => tapToGo(cx, cy);
+window.__carProbe = (cx, cy) => {
+  ray.setFromCamera(new THREE.Vector2(cx/innerWidth*2 - 1, -(cy/innerHeight)*2 + 1), camera);
+  return ray.intersectObjects([driveCar, ...parkedCars], true).length;
+};
 window.__probe = (cx, cy) => {
   ray.setFromCamera(new THREE.Vector2(cx/innerWidth*2 - 1, -(cy/innerHeight)*2 + 1), camera);
   const h = ray.intersectObjects(wordObjects.map(w => w.o), true);
@@ -1513,7 +1612,7 @@ function frame() {
 
   /* заскучал на 6 секунд — Луи сам идёт по тропинке к домику */
   const dHouseNow = Math.hypot(hero.position.x - HX, hero.position.z - (HZ + 1.8));
-  if (!indoor && !manual && !walkTarget && introDone && !doorOpen && dHouseNow > 4 && t - lastInput > 6) {
+  if (!indoor && !driving && !manual && !walkTarget && introDone && !doorOpen && dHouseNow > 4 && t - lastInput > 6) {
     autoWalk = true;
     const wz = hero.position.z - 12;
     walkTarget = wz <= HZ + 4 ? { x: HX, z: HZ + 2.2 }      // финальный шаг — к самой двери
@@ -1528,20 +1627,26 @@ function frame() {
     }
     sitting = false; lying = false;
   }
-  let moving = false, sp = indoor ? 4.6 : 5.2;
+  let moving = false, sp = driving ? 13 : indoor ? 4.6 : 5.2;
   if (manual) {
     // в комнате камера неподвижна → направления экранные («вверх» = вглубь), без camYaw
     const dir = indoor ? Math.atan2(ix, iz) : (Math.atan2(ix, iz) + camYaw + Math.PI);
     let d = dir - heading;
     while (d > Math.PI) d -= 2*Math.PI;
     while (d < -Math.PI) d += 2*Math.PI;
-    heading += d * Math.min(1, dt*10);
+    heading += d * Math.min(1, dt*(driving ? 3.2 : 10));   // машина поворачивает с заносом
     moving = true;
   } else if (walkTarget) {
     const dx = walkTarget.x - hero.position.x, dz = walkTarget.z - hero.position.z;
     const dist = Math.hypot(dx, dz);
     if (dist < .7) {
       walkTarget = null; tapRing.visible = false;
+      if (carPending) {                            // добежал до машины — за руль!
+        carPending = false; driving = true;
+        hero.visible = false;
+        heading = driveCar.rotation.y;
+        blip(80, .5, 'sawtooth', .07, 160);        // завёлся
+      }
       if (sitPending && sitSpot) {                 // дошёл до дивана или стула — садимся
         sitPending = false; sitting = true;
         hero.position.set(sitSpot.x, ROOM_Y, sitSpot.z);
@@ -1562,9 +1667,9 @@ function frame() {
       let d = dir - heading;
       while (d > Math.PI) d -= 2*Math.PI;
       while (d < -Math.PI) d += 2*Math.PI;
-      heading += d * Math.min(1, dt*8);
+      heading += d * Math.min(1, dt*(driving ? 3.2 : 8));
       moving = true;
-      sp = autoWalk ? 2.8 : 4.6;
+      sp = driving ? 13 : autoWalk ? 2.8 : 4.6;
     }
   }
   const busyAnim = modelLoaded && curAction && curAction.loop === THREE.LoopOnce && curAction.isRunning();
@@ -1594,7 +1699,7 @@ function frame() {
       hero.position.z = THREE.MathUtils.clamp(hero.position.z, -140, 70);
       const hcx = hero.position.x - HX, hcz = hero.position.z - HZ;
       if (Math.abs(hcx) < 2.2 && Math.abs(hcz) < 2.0) {
-        if (doorAnim > .75 && Math.abs(hcx) < 1.0 && hcz > 0) enterRoom();   // дверь открыта — заходим!
+        if (!driving && doorAnim > .75 && Math.abs(hcx) < 1.0 && hcz > 0) enterRoom();   // в дом — только пешком!
         else {
           if (Math.abs(hcx) > Math.abs(hcz) * 1.1) hero.position.x = HX + Math.sign(hcx) * 2.2;
           else hero.position.z = HZ + Math.sign(hcz) * 2.0;
@@ -1634,7 +1739,7 @@ function frame() {
 
   /* домик: подошёл — тук-тук, дверь открывается, Дино выглядывает и здоровается */
   const dd = Math.hypot(hero.position.x - HX, hero.position.z - (HZ + 1.8));
-  if (!indoor && !doorOpen && dd < 3.2) {
+  if (!indoor && !driving && !doorOpen && dd < 3.2) {
     doorOpen = true; knockT = t;
     walkTarget = null; autoWalk = false; tapRing.visible = false;   // гасим цель ОДИН раз, тапы дальше живут
     knockSfx();
@@ -1706,9 +1811,22 @@ function frame() {
     if (L.life < 0 || L.m.position.y < hills(L.m.position.x, L.m.position.z)) { outdoorG.remove(L.m); leaves.splice(i, 1); }
   }
 
+  /* машина следует за «пилотом»: рык мотора и выхлоп */
+  if (driving) {
+    driveCar.position.set(hero.position.x, hills(hero.position.x, hero.position.z) + .04, hero.position.z);
+    driveCar.rotation.y = heading;
+    if (t > motorNext) {
+      blip(55 + curSp * 5, .15, 'sawtooth', .045, 85 + curSp * 5);
+      motorNext = t + .16;
+    }
+    if (curSp > 2 && Math.random() < dt * 6) {
+      spawnDust();                                 // выхлоп-пыльца позади
+    }
+  }
+
   /* шаги: мягко по траве, глухо по тропинке + пыль из-под ног */
   const stepSin = Math.sin(runPhase);
-  if (curSp > .8 && Math.sign(stepSin) !== Math.sign(prevStepSin)) {
+  if (!driving && curSp > .8 && Math.sign(stepSin) !== Math.sign(prevStepSin)) {
     if (indoor) blip(140, .04, 'sine', .06);
     else if (Math.abs(hero.position.x - pathX(hero.position.z)) < 1.5) { blip(110, .05, 'sine', .09); spawnDust(); }
     else { blip(1500, .05, 'triangle', .045, 500); spawnDust(); }
@@ -1842,9 +1960,10 @@ function frame() {
     while (dYaw < -Math.PI) dYaw += 2*Math.PI;
     camYaw += dYaw * Math.min(1, dt*1.8);
   }
-  const cx = hero.position.x - Math.sin(camYaw)*7.5;
-  const cz = hero.position.z - Math.cos(camYaw)*7.5;
-  const cy = Math.max(hills(cx, cz) + 2.4, hero.position.y + 2.6);
+  const camDist = driving ? 11.5 : 7.5;
+  const cx = hero.position.x - Math.sin(camYaw)*camDist;
+  const cz = hero.position.z - Math.cos(camYaw)*camDist;
+  const cy = Math.max(hills(cx, cz) + 2.4, hero.position.y + (driving ? 4.2 : 2.6));
   if (indoor) {                                        // кукольный дом: камера смотрит в разрез
     const bx = inKitchen ? RX2 : inPlay ? RX3 : RX;
     const bcz = (inKitchen || inPlay) ? 0 : RZ;
