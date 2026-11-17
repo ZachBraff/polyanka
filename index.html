@@ -125,6 +125,7 @@
 <script type="module">
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { clone as skClone } from 'three/addons/utils/SkeletonUtils.js';
 
 /* ================= сцена ================= */
 const renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -409,6 +410,7 @@ for (let i = 0; i < 64; i++) {
   tree(x, z, .8+Math.random()*1.4);
 }
 
+const houseList = [];
 function house(x, z, s, ry) {
   const g = new THREE.Group();
   const walls = new THREE.Mesh(new THREE.BoxGeometry(2.2*s, 1.6*s, 1.8*s), toon('#F6EFE2'));
@@ -419,6 +421,7 @@ function house(x, z, s, ry) {
   g.position.set(x, hills(x,z), z);
   g.rotation.y = ry;
   outdoorG.add(g);
+  houseList.push(g);
 }
 const VX = -38, VZ = -110;
 [[0,0,1.3],[6,3,1],[-6,4,1.1],[3,-6,.9],[-4,-5,1],[10,-2,.8],[-11,-1,.9]].forEach(([dx,dz,s]) =>
@@ -627,6 +630,66 @@ for (let i = 0; i < 5; i++) {                 // дома второго ряд�
   const x = TOWN_X + Math.cos(a) * (RING_R + 6.5), z = TOWN_Z + Math.sin(a) * (RING_R + 6.5);
   house(x, z, .9 + Math.random() * .5, a + Math.PI / 2);
 }
+
+/* ============ дорога как настоящая: разметка, зебра, фонари, знак ============ */
+const AX = 2, AZ = -46, BX = TOWN_X + RING_R - 1, BZ = TOWN_Z + 6;
+const roadLen = Math.hypot(BX - AX, BZ - AZ), roadAng = Math.atan2(BX - AX, BZ - AZ);
+const dashMat = new THREE.MeshBasicMaterial({ color: '#F2EFE4' });
+const dashGeo = new THREE.PlaneGeometry(.16, 1.5); dashGeo.rotateX(-Math.PI/2);
+for (let d = 3; d < roadLen - 7; d += 4.2) {               // пунктир по улице
+  const x = AX + (BX - AX) * d / roadLen, z = AZ + (BZ - AZ) * d / roadLen;
+  const dash = new THREE.Mesh(dashGeo, dashMat);
+  dash.position.set(x, hills(x, z) + .07, z);
+  dash.rotation.y = roadAng;
+  outdoorG.add(dash);
+}
+for (let i = 0; i < 36; i++) {                             // пунктир по кольцевой
+  const a = i / 36 * Math.PI * 2;
+  const x = TOWN_X + Math.cos(a) * RING_R, z = TOWN_Z + Math.sin(a) * RING_R;
+  const dash = new THREE.Mesh(dashGeo, dashMat);
+  dash.position.set(x, hills(x, z) + .07, z);
+  dash.rotation.y = Math.atan2(-Math.sin(a), Math.cos(a));
+  outdoorG.add(dash);
+}
+const zebraGeo = new THREE.PlaneGeometry(2.6, .38); zebraGeo.rotateX(-Math.PI/2);
+for (let k = 0; k < 6; k++) {                              // зебра перед въездом в городок
+  const d = roadLen - 10 + k * .8;
+  const x = AX + (BX - AX) * d / roadLen, z = AZ + (BZ - AZ) * d / roadLen;
+  const stripe = new THREE.Mesh(zebraGeo, dashMat);
+  stripe.position.set(x, hills(x, z) + .08, z);
+  stripe.rotation.y = roadAng;
+  outdoorG.add(stripe);
+}
+[.3, .55, .8].forEach(f => {                               // фонари вдоль улицы
+  const px = AX + (BX - AX) * f, pz = AZ + (BZ - AZ) * f;
+  const x = px + Math.cos(roadAng) * 2.9, z = pz - Math.sin(roadAng) * 2.9;
+  const pole = new THREE.Mesh(new THREE.CylinderGeometry(.07, .09, 2.8, 8), toon('#5A5A62'));
+  pole.position.set(x, hills(x, z) + 1.4, z);
+  const bulb = new THREE.Mesh(new THREE.SphereGeometry(.2, 10, 8), new THREE.MeshBasicMaterial({ color: '#FFE9A8' }));
+  bulb.position.set(x, hills(x, z) + 2.9, z);
+  outdoorG.add(pole, bulb);
+});
+const signG = new THREE.Group();                           // знак «городок» у начала улицы
+{
+  const sx = AX + (BX - AX) * .08 - Math.cos(roadAng) * 2.9, sz = AZ + (BZ - AZ) * .08 + Math.sin(roadAng) * 2.9;
+  const pole = new THREE.Mesh(new THREE.CylinderGeometry(.06, .08, 2.1, 8), toon('#5A5A62'));
+  pole.position.y = 1.05;
+  const plate = new THREE.Mesh(new THREE.BoxGeometry(1.0, .72, .07), toon('#4A7BD0'));
+  plate.position.y = 2.2;
+  const mini = new THREE.Mesh(new THREE.BoxGeometry(.3, .22, .05), toon('#FFFFFF'));
+  mini.position.set(0, 2.1, .05);
+  const miniRoof = new THREE.Mesh(new THREE.ConeGeometry(.24, .18, 4), toon('#FFFFFF'));
+  miniRoof.position.set(0, 2.32, .05); miniRoof.rotation.y = Math.PI/4;
+  signG.add(pole, plate, mini, miniRoof);
+  signG.position.set(sx, hills(sx, sz), sz);
+  signG.rotation.y = roadAng + Math.PI/2;
+  outdoorG.add(signG);
+}
+const outdoorWords = [
+  { o: mill, ru: 'Мельница!', de: 'Die Windmühle!' },
+  { o: signG, ru: 'Знак!', de: 'Das Schild!' },
+  ...houseList.map(h => ({ o: h, ru: 'Дом!', de: 'Das Haus!' })),
+];
 /* Луи и Дино выглядывают из кабины во время езды */
 function makeHeroHead(s) {
   const g = new THREE.Group();
@@ -700,6 +763,53 @@ const DINO_PHRASES = [
   ['Ням-ням!', 'Mampf-mampf!'],
   ['Догони меня!', 'Fang mich!'],
 ];
+
+/* папа Мирко — гуляет по лугу, зовёт Луи */
+const dadG = new THREE.Group();
+dadG.position.set(HX + 3, hills(HX + 3, HZ + 9), HZ + 9);
+dadG.rotation.y = Math.PI;
+outdoorG.add(dadG);
+let dadReady = false, dadMixer = null, dadCur = null, dadCurName = null, dadBusy = false;
+const dadActions = {};
+let dadTarget = null, dadNextMove = 0, dadSay = 14;
+const DAD_PHRASES = [
+  ['Луи, сынок!', 'Louis, mein Junge!'],
+  ['Кто тут мой малыш?', 'Wo ist mein Schatz?'],
+  ['Идём обедать!', 'Komm, essen!'],
+  ['Я тебя люблю!', 'Ich hab dich lieb!'],
+  ['Дай пять!', 'Gib mir fünf!'],
+  ['Какой ты большой!', 'Du bist so groß!'],
+];
+function dadPlay(name, once) {
+  const a = dadActions[name];
+  if (!a || dadCurName === name) return;
+  a.reset();
+  if (once) { a.setLoop(THREE.LoopOnce); a.clampWhenFinished = true; }
+  else a.setLoop(THREE.LoopRepeat, Infinity);
+  if (dadCur) dadCur.crossFadeTo(a, .25, false);
+  a.play();
+  dadCur = a; dadCurName = name;
+}
+
+/* жители городка — бродят по кольцевой и здороваются со всеми */
+const npcs = [];
+const NPC_PHRASES = [
+  ['Привет!', 'Hallo!'],
+  ['Добрый день!', 'Guten Tag!'],
+  ['Хорошего дня!', 'Schönen Tag!'],
+  ['Как дела?', 'Wie geht’s?'],
+  ['До встречи!', 'Bis bald!'],
+];
+function npcPlay(n, name, once) {
+  const a = n.acts[name];
+  if (!a || n.curName === name) return;
+  a.reset();
+  if (once) { a.setLoop(THREE.LoopOnce); a.clampWhenFinished = true; }
+  else a.setLoop(THREE.LoopRepeat, Infinity);
+  if (n.cur) n.cur.crossFadeTo(a, .25, false);
+  a.play();
+  n.cur = a; n.curName = name;
+}
 
 
 let doorOpen = false, doorAnim = 0, knockT = -9;
@@ -893,7 +1003,7 @@ tableLeg.position.set(RX + 6.5, ROOM_Y + .42, RZ + 4.5);
 const cup = new THREE.Mesh(new THREE.CylinderGeometry(.12, .09, .22, 10), toon('#5B7FD4'));
 cup.position.set(RX + 6.8, ROOM_Y + 1.02, RZ + 4.3);
 roomG.add(tableTop, tableLeg, cup);
-wordObjects.push({ o: tableTop, ru: 'Стол!', de: 'Der Tisch!' }, { o: tableLeg, ru: 'Стол!', de: 'Der Tisch!' }, { o: cup, ru: 'Чашка!', de: 'Die Tasse!' });
+wordObjects.push({ o: tableTop, ru: 'Стол!', de: 'Der Tisch!' }, { o: tableLeg, ru: 'Стол!', de: 'Der Tisch!' }, { o: cup, ru: 'Чашка!', de: 'Die Tasse!', kind: 'cup' });
 /* кровать */
 const bedG = new THREE.Group();
 const bedBase = new THREE.Mesh(new THREE.BoxGeometry(1.4, .4, 2.6), toon('#8A5F3C')); bedBase.position.y = .2;
@@ -1118,7 +1228,7 @@ bookG.rotation.y = .4;
 playG.add(bookG);
 wordObjects.push({ o: bookG, ru: 'Книжка!', de: 'Das Buch!', kind: 'bookread' });
 scene.add(playG);
-let blocksT = -9, carT = -9, teddyT = -9, pyrT = -9;
+let blocksT = -9, carT = -9, teddyT = -9, pyrT = -9, cupSip = -9;
 
 function enterPlay() {
   inPlay = true;
@@ -1442,6 +1552,27 @@ function louisify(tex) { // зелёная туника → голубая фу�
   t.colorSpace = tex.colorSpace;
   return t;
 }
+function tintAtlas(tex, hue) { // перекраска туники в свой цвет (волосы не трогаем) — для папы и жителей
+  const img = tex.image;
+  const cv = document.createElement('canvas');
+  cv.width = img.width; cv.height = img.height;
+  const c2 = cv.getContext('2d');
+  c2.drawImage(img, 0, 0);
+  const d = c2.getImageData(0, 0, cv.width, cv.height), p = d.data;
+  for (let i = 0; i < p.length; i += 4) {
+    const [h, s, l] = rgb2hsl(p[i], p[i+1], p[i+2]);
+    if (h > 70 && h < 195 && s > .2) {
+      const out = hsl2rgb(hue, s * .6, Math.min(.56, l * .95 + .02));
+      p[i] = out[0]; p[i+1] = out[1]; p[i+2] = out[2];
+    }
+  }
+  c2.putImageData(d, 0, 0);
+  const t = new THREE.CanvasTexture(cv);
+  t.flipY = tex.flipY;
+  t.colorSpace = tex.colorSpace;
+  return t;
+}
+const mircofy = tex => tintAtlas(tex, 358);
 new GLTFLoader().load('assets/Rogue.wasm', g => {   // .wasm — потому что артефакты не раздают .glb; внутри обычный glTF
   const model = g.scene;
   const HIDE = ['Knife', 'Knife_Offhand', '1H_Crossbow', '2H_Crossbow', 'Throwable'];
@@ -1453,9 +1584,70 @@ new GLTFLoader().load('assets/Rogue.wasm', g => {   // .wasm — потому ч
       if (!mat && o.material && o.material.map) mat = o.material;
     }
   });
+  const dadModel = skClone(model);                 // клон для папы ДО перекраски Луи
+  const origMap = mat ? mat.map : null;
   if (mat) { mat.map = louisify(mat.map); mat.needsUpdate = true; }
   const size = new THREE.Box3().setFromObject(model).getSize(new THREE.Vector3());
   model.scale.setScalar(1.35 / size.y);
+  /* папа Мирко: своя раскраска (бордовая рубашка, каштановые волосы), выше ростом */
+  if (origMap) {
+    const dadTex = mircofy(origMap);
+    dadModel.traverse(o => {
+      if (o.isMesh || o.isSkinnedMesh) {
+        o.frustumCulled = false;
+        if (o.material && o.material.map) {
+          o.material = o.material.clone();
+          o.material.map = dadTex;
+          o.material.needsUpdate = true;
+        }
+      }
+    });
+    dadModel.scale.setScalar(1.62 / size.y);
+    dadMixer = new THREE.AnimationMixer(dadModel);
+    ['Idle', 'Walking_B', 'Cheer', 'Wave'].forEach(n => {
+      const c = g.animations.find(a => a.name === n);
+      if (c) dadActions[n] = dadMixer.clipAction(c);
+    });
+    dadMixer.addEventListener('finished', () => {
+      dadBusy = false; dadCur = null; dadCurName = null;
+      dadMixer.stopAllAction();
+      dadPlay('Idle');
+    });
+    dadG.add(dadModel);
+    dadReady = true;
+    dadPlay('Idle');
+    /* двое соседей в городке: оранжевый и фиолетовый */
+    [[35, 1.5, TOWN_X + RING_R + 1, TOWN_Z + 6], [268, 1.45, TOWN_X - 6, TOWN_Z - RING_R - 1]].forEach(([hue, sc, nx, nz]) => {
+      const m = skClone(model);
+      const tex2 = tintAtlas(origMap, hue);
+      m.traverse(o => {
+        if (o.isMesh || o.isSkinnedMesh) {
+          o.frustumCulled = false;
+          if (o.material && o.material.map) { o.material = o.material.clone(); o.material.map = tex2; o.material.needsUpdate = true; }
+        }
+      });
+      m.scale.setScalar(sc / size.y);
+      const grp = new THREE.Group();
+      grp.position.set(nx, hills(nx, nz), nz);
+      grp.add(m);
+      outdoorG.add(grp);
+      const mx = new THREE.AnimationMixer(m);
+      const acts = {};
+      ['Idle', 'Walking_B', 'Cheer', 'Wave'].forEach(n => {
+        const c = g.animations.find(a => a.name === n);
+        if (c) acts[n] = mx.clipAction(c);
+      });
+      const npc = { g: grp, mx, acts, cur: null, curName: null, busy: false,
+                    target: null, nextMove: Math.random()*4, say: 8 + Math.random()*8 };
+      mx.addEventListener('finished', () => {
+        npc.busy = false; npc.cur = null; npc.curName = null;
+        mx.stopAllAction();
+        npcPlay(npc, 'Idle');
+      });
+      npcPlay(npc, 'Idle');
+      npcs.push(npc);
+    });
+  }
   mixer = new THREE.AnimationMixer(model);
   ['Idle', 'Walking_B', 'Running_A', 'Cheer', 'Sit_Chair_Down', 'Sit_Chair_Idle', 'Sit_Chair_StandUp', 'Lie_Down', 'Lie_Idle', 'Lie_StandUp'].forEach(n => {
     const c = g.animations.find(a => a.name === n);
@@ -1650,6 +1842,7 @@ bookCanvas.addEventListener('click', e => {
 });
 bookCard.addEventListener('click', e => { if (e.target === bookCard) closeBook(); });
 window.__book = { open: openBook, flip: flipBook, close: closeBook, state: () => ({ bookOpen, bookPage }) };
+window.__dad = () => ({ ready: dadReady, x: +dadG.position.x.toFixed(1), z: +dadG.position.z.toFixed(1), anim: dadCurName, busy: dadBusy });
 
 const hintEl = document.getElementById('hint');
 hintEl.textContent = matchMedia('(pointer: coarse)').matches
@@ -1694,6 +1887,28 @@ function tapToGo(cx, cy) {
       blip(700, .12, 'sine', .2, 1100); blip(950, .14, 'sine', .18, 1400);
       sayWorld('Дино!', 'Dino!', clock.elapsedTime);
       return;
+    }
+  }
+  if (!indoor && dadReady) {                        // потрогал папу — машет и радуется
+    const dp = ray.intersectObject(dadG, true);
+    if (dp.length) {
+      dadTarget = null; dadBusy = true;
+      dadPlay(dadActions['Wave'] ? 'Wave' : 'Cheer', true);
+      blip(440, .14, 'sine', .16, 600); blip(560, .12, 'sine', .14, 800);
+      sayWorld('Папа!', 'Papa!', clock.elapsedTime);
+      return;
+    }
+  }
+  if (!indoor && npcs.length) {                     // потрогал соседа — машет
+    for (const n of npcs) {
+      const hp = ray.intersectObject(n.g, true);
+      if (hp.length) {
+        n.target = null; n.busy = true;
+        npcPlay(n, n.acts['Wave'] ? 'Wave' : 'Cheer', true);
+        blip(520, .12, 'sine', .14, 700);
+        sayWorld('Сосед!', 'Der Nachbar!', clock.elapsedTime);
+        return;
+      }
     }
   }
   if (indoor) {                                    // в комнате каждая вещь называет себя
@@ -1752,6 +1967,10 @@ function tapToGo(cx, cy) {
           [660, 784, 880, 1047].forEach((f, i) => setTimeout(() => blip(f, .14, 'triangle', .1), i * 90));
         }
         if (w.kind === 'bookread') setTimeout(openBook, 500);   // слово «Книжка» успевает мелькнуть
+        if (w.kind === 'cup') {                                  // буль-буль из чашки
+          cupSip = tn;
+          [420, 350, 290].forEach((f, i) => setTimeout(() => blip(f, .09, 'sine', .14, 120), i * 160));
+        }
 
         blip(880, .07, 'triangle', .1);
         sayWorld(w.ru, w.de, tn);
@@ -1800,6 +2019,8 @@ function tapToGo(cx, cy) {
           hero.position.set(driveCar.position.x + 1.7, 0, driveCar.position.z);
           if (inGaragePad(hero.position.x, hero.position.z))   // в гараже не высаживаем в дверь
             hero.position.x = Math.min(hero.position.x, GX + 1.2);
+          dinoWalker.position.set(hero.position.x - 1.6, 0, hero.position.z + .8);   // Дино вышел вместе с Луи
+          dwTarget = null;
           walkTarget = null; tapRing.visible = false;
           blip(300, .2, 'sawtooth', .05, 60);
           sayWorld('Приехали!', 'Angekommen!', tn);
@@ -1814,6 +2035,14 @@ function tapToGo(cx, cy) {
         sayWorld('Машина!', 'Das Auto!', tn);
       }
       return;
+    }
+  }
+  if (!indoor) {                                    // уличные вещи называют себя, а тап дальше ведёт Луи
+    const hw = ray.intersectObjects(outdoorWords.map(w => w.o), true);
+    if (hw.length) {
+      let p = hw[0].object, w = null;
+      while (p && !w) { w = outdoorWords.find(q => q.o === p) || null; p = p.parent; }
+      if (w) { blip(880, .07, 'triangle', .1); sayWorld(w.ru, w.de, clock.elapsedTime); }
     }
   }
   const hit = ray.intersectObject(indoor ? (inKitchen ? kitFloor : inPlay ? playFloor : roomFloor) : rayGround)[0];
@@ -2066,6 +2295,8 @@ function frame() {
             driving = false;
             hero.visible = true;
             hero.position.set(GX, 0, GZ + 3.6);
+            dinoWalker.position.set(GX - 1.8, 0, GZ + 4.4);                 // Дино выходит к воротам вместе с Луи
+            dwTarget = null;
             driveCar.position.set(GX, hills(GX, GZ) + .18, GZ - .9);        // аккуратно внутрь, на плоский пол
             driveCar.rotation.y = 0;                                        // носом к выходу
             walkTarget = null; tapRing.visible = false;
@@ -2139,7 +2370,7 @@ function frame() {
   }
 
   /* Дино гуляет во дворе и болтает */
-  dinoWalker.visible = !indoor && doorAnim < .1;
+  dinoWalker.visible = !indoor && doorAnim < .1 && !driving;   // в поездке Дино сидит в машине, не на лугу
   if (dinoWalker.visible && introDone) {
     const dLui = Math.hypot(hero.position.x - dinoWalker.position.x, hero.position.z - dinoWalker.position.z);
     if (dLui < 2.6) {                                       // Луи подошёл — Дино поворачивается к нему
@@ -2176,6 +2407,83 @@ function frame() {
       blip(700, .1, 'sine', .15, 1100);
     }
   }
+
+  /* папа Мирко: гуляет по лугу, здоровается, зовёт */
+  if (dadReady) {
+    dadMixer.update(dt);
+    if (!indoor) {
+      const dDad = Math.hypot(hero.position.x - dadG.position.x, hero.position.z - dadG.position.z);
+      if (dDad < 2.8 && !driving) {                           // Луи подошёл — папа останавливается и смотрит на него
+        dadTarget = null; dadNextMove = t + 2;
+        const dirL = Math.atan2(hero.position.x - dadG.position.x, hero.position.z - dadG.position.z);
+        let dl = dirL - dadG.rotation.y;
+        while (dl > Math.PI) dl -= 2*Math.PI; while (dl < -Math.PI) dl += 2*Math.PI;
+        dadG.rotation.y += dl * Math.min(1, dt*6);
+        if (!dadBusy) dadPlay('Idle');
+      } else if (!dadTarget && t > dadNextMove && !dadBusy) {
+        dadTarget = { x: HX - 4 + Math.random()*16, z: HZ + 4 + Math.random()*13 };   // луг перед домом
+      }
+      if (dadTarget && !dadBusy) {
+        const ddx = dadTarget.x - dadG.position.x, ddz = dadTarget.z - dadG.position.z;
+        const dd = Math.hypot(ddx, ddz);
+        if (dd < .5) { dadTarget = null; dadNextMove = t + 3 + Math.random()*6; dadPlay('Idle'); }
+        else {
+          const dir = Math.atan2(ddx, ddz);
+          let dr = dir - dadG.rotation.y;
+          while (dr > Math.PI) dr -= 2*Math.PI; while (dr < -Math.PI) dr += 2*Math.PI;
+          dadG.rotation.y += dr * Math.min(1, dt*3.5);
+          dadG.position.x += Math.sin(dadG.rotation.y) * 2.1 * dt;
+          dadG.position.z += Math.cos(dadG.rotation.y) * 2.1 * dt;
+          dadPlay('Walking_B');
+        }
+      } else if (!dadBusy && dadCurName !== 'Idle') dadPlay('Idle');
+      dadG.position.y = hills(dadG.position.x, dadG.position.z);
+      if (t > dadSay && dDad < 16 && !driving && !bookOpen) {  // папина фразочка
+        dadSay = t + 11 + Math.random()*9;
+        const ph = DAD_PHRASES[Math.floor(Math.random()*DAD_PHRASES.length)];
+        sayWorld(ph[0], ph[1], t);
+      }
+    }
+  }
+
+  /* жители городка бродят по кольцевой */
+  npcs.forEach(n => {
+    n.mx.update(dt);
+    if (indoor) return;
+    const dL = Math.hypot(hero.position.x - n.g.position.x, hero.position.z - n.g.position.z);
+    if (dL < 2.8 && !driving) {                               // Луи подошёл — сосед поворачивается
+      n.target = null; n.nextMove = t + 2;
+      const dirL = Math.atan2(hero.position.x - n.g.position.x, hero.position.z - n.g.position.z);
+      let dl = dirL - n.g.rotation.y;
+      while (dl > Math.PI) dl -= 2*Math.PI; while (dl < -Math.PI) dl += 2*Math.PI;
+      n.g.rotation.y += dl * Math.min(1, dt*6);
+      if (!n.busy) npcPlay(n, 'Idle');
+    } else if (!n.target && t > n.nextMove && !n.busy) {
+      const a = Math.random()*Math.PI*2;
+      const r = RING_R + 2.8 + Math.random()*4;               // тротуар за кольцевой
+      n.target = { x: TOWN_X + Math.cos(a)*r, z: TOWN_Z + Math.sin(a)*r };
+    }
+    if (n.target && !n.busy) {
+      const ddx = n.target.x - n.g.position.x, ddz = n.target.z - n.g.position.z;
+      const dd = Math.hypot(ddx, ddz);
+      if (dd < .5) { n.target = null; n.nextMove = t + 3 + Math.random()*7; npcPlay(n, 'Idle'); }
+      else {
+        const dir = Math.atan2(ddx, ddz);
+        let dr = dir - n.g.rotation.y;
+        while (dr > Math.PI) dr -= 2*Math.PI; while (dr < -Math.PI) dr += 2*Math.PI;
+        n.g.rotation.y += dr * Math.min(1, dt*3.5);
+        n.g.position.x += Math.sin(n.g.rotation.y) * 1.9 * dt;
+        n.g.position.z += Math.cos(n.g.rotation.y) * 1.9 * dt;
+        npcPlay(n, 'Walking_B');
+      }
+    } else if (!n.busy && n.curName !== 'Idle') npcPlay(n, 'Idle');
+    n.g.position.y = hills(n.g.position.x, n.g.position.z);
+    if (t > n.say && dL < 10 && !driving && !bookOpen) {      // базовое «здрасьте» всем
+      n.say = t + 10 + Math.random()*10;
+      const ph = NPC_PHRASES[Math.floor(Math.random()*NPC_PHRASES.length)];
+      sayWorld(ph[0], ph[1], t);
+    }
+  });
 
   /* бабочки: разлетаются от Луи и возвращаются домой */
   flies.forEach(f => {
@@ -2285,6 +2593,7 @@ function frame() {
     if (ball.position.x < RX-11.4 || ball.position.x > RX+11.4) { ballVel.x *= -1; ball.position.x = THREE.MathUtils.clamp(ball.position.x, RX-11.4, RX+11.4); blip(200,.05,'sine',.08); }
     if (ball.position.z < RZ-8.4 || ball.position.z > RZ+8.7) { ballVel.y *= -1; ball.position.z = THREE.MathUtils.clamp(ball.position.z, RZ-8.4, RZ+8.7); blip(200,.05,'sine',.08); }
     ball.rotation.z -= ballVel.x*dt*2.5; ball.rotation.x += ballVel.y*dt*2.5;
+    cup.rotation.z = (t - cupSip < .9) ? Math.sin((t - cupSip)*14)*.45*(1 - (t - cupSip)/.9) : 0;   // чашка булькает
     const rg = Math.max(0, 1 - (t - dinoRoomGig)*1.3);
     dinoRoom.scale.setScalar(1 + .15*Math.sin((t - dinoRoomGig)*15)*rg);
     dinoRoom.rotation.y = dinoBaseRy + Math.sin(t*1.2)*.12;
